@@ -173,7 +173,12 @@ build probes which ABI links and compiles to match.
 
 Stock VTK wheels are not abi3, so the wheel is tagged per CPython. cvista is
 abi3, and on macOS arm64, where Kitware publishes no wheel SDK, the wheel
-carries only the cvista build and is tagged `cp312-abi3`.
+carries only the cvista build and is tagged `cp312-abi3`. On Windows the
+cvista wheel's DLLs carry delvewheel's hashed names, which the import
+libraries in `cvista-sdk` do not reference, so the build dependency is
+skipped there (`sys_platform != 'win32'`) and the Windows wheel carries only
+the stock build. The stock Windows wheel keeps its DLL names, and
+`vtkmodules` puts its `vtk.libs` directory on the DLL search path at import.
 
 Each build finds its distribution's libraries through an rpath of
 `$ORIGIN/../../<vtkmodules|cvista>` (Linux), `@loader_path/../../cvista`

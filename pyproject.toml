@@ -1,9 +1,11 @@
 [build-system]
 build-backend = "scikit_build_core.build"
 # cvista-sdk supplies the CMake config for the cvista build; the stock-VTK
-# build uses Kitware's wheel SDK, fetched by scripts/fetch_vtk_sdk.py.
+# build uses Kitware's wheel SDK, fetched by scripts/fetch_vtk_sdk.py. The
+# cvista wheel's DLL names are mangled on Windows, so its SDK cannot be linked
+# there and the Windows wheel carries the stock build only.
 requires = [
-  "cvista-sdk==9.7.0.5.*",
+  "cvista-sdk==9.7.0.5.*; sys_platform != 'win32'",
   "scikit-build-core>=0.10",
   "setuptools_scm>=8",
 ]
@@ -20,6 +22,7 @@ classifiers = [
   "Development Status :: 3 - Alpha",
   "Intended Audience :: Science/Research",
   "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: C++",
   "Programming Language :: Python :: 3",
@@ -55,6 +58,7 @@ wheel.packages = ["src/pyvista_render_passes"]
 wheel.exclude = [
   "**/*.cmake",
   "**/*.h",
+  "**/*.lib",
   "**/cmake/**",
   "include/**",
   "share/**",
@@ -99,9 +103,11 @@ repair-wheel-command = "delocate-wheel --exclude 'libvtk' --ignore-missing-depen
 # abi3audit reads VTK's own PyVTK* wrapping symbols as stable-ABI violations.
 audit-command = ""
 
+# Stock build only (see [build-system]). Nothing to bundle: the stock wheel
+# puts its vtk.libs directory on the DLL search path when vtkmodules imports.
 [tool.cibuildwheel.windows]
 archs = ["AMD64"]
-# Nothing to bundle: the DLLs are found at import through add_dll_directory.
+test-extras = ["vtk"]
 repair-wheel-command = ""
 
 # uv only rebuilds a path install when a cache key changes; the default key is

@@ -20,7 +20,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/photo_real/on.png" width="560" alt="Marble bust with depth peeling, SSAO, shadows and SSAA">
+  <img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/photo_real/on.png" width="560" alt="Marble bust with depth peeling, SSAO, shadows and SSAA">
 </p>
 
 Volume-safe supersampling (SSAA), screen-space ambient occlusion (SSAO), eye-dome lighting (EDL), depth peeling, shadow maps, depth of field and Gaussian blur, driven from `plotter.render_passes`.
@@ -79,21 +79,21 @@ PyVista's example datasets, rendered by `scripts/render_gallery.py` into `docs/i
 <table>
   <tr><th width="50%">Off</th><th width="50%">On</th></tr>
   <tr><th colspan="2">EDL on a lidar point cloud: <code>enable_edl()</code></th></tr>
-  <tr><td><img src="docs/images/edl/off.png" width="440"></td><td><img src="docs/images/edl/on.png" width="440"></td></tr>
+  <tr><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/edl/off.png" width="440"></td><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/edl/on.png" width="440"></td></tr>
   <tr><th colspan="2">SSAO on a CAD enclosure: <code>enable_ssao()</code></th></tr>
-  <tr><td><img src="docs/images/ssao/off.png" width="440"></td><td><img src="docs/images/ssao/on.png" width="440"></td></tr>
+  <tr><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/ssao/off.png" width="440"></td><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/ssao/on.png" width="440"></td></tr>
   <tr><th colspan="2">Shadow maps on a statue: <code>enable_shadows()</code></th></tr>
-  <tr><td><img src="docs/images/shadows/off.png" width="440"></td><td><img src="docs/images/shadows/on.png" width="440"></td></tr>
+  <tr><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/shadows/off.png" width="440"></td><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/shadows/on.png" width="440"></td></tr>
   <tr><th colspan="2">SSAA on a finite element mesh: <code>enable_anti_aliasing()</code></th></tr>
-  <tr><td><img src="docs/images/ssaa/off.png" width="440"></td><td><img src="docs/images/ssaa/on.png" width="440"></td></tr>
+  <tr><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/ssaa/off.png" width="440"></td><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/ssaa/on.png" width="440"></td></tr>
   <tr><th colspan="2">Depth peeling on a translucent floor plan: <code>enable_depth_peeling()</code></th></tr>
-  <tr><td><img src="docs/images/depth_peeling/off.png" width="440"></td><td><img src="docs/images/depth_peeling/on.png" width="440"></td></tr>
+  <tr><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/depth_peeling/off.png" width="440"></td><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/depth_peeling/on.png" width="440"></td></tr>
   <tr><th colspan="2">EDL annotation bypass keeps the cube axes and orientation axes out of EDL (text and scalar bars always are), on by default; off is <code>disable_annotation_bypass()</code></th></tr>
-  <tr><td><img src="docs/images/edl_annotation_bypass/off.png" width="440"></td><td><img src="docs/images/edl_annotation_bypass/on.png" width="440"></td></tr>
+  <tr><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/edl_annotation_bypass/off.png" width="440"></td><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/edl_annotation_bypass/on.png" width="440"></td></tr>
   <tr><th colspan="2">CT volume under an opaque slice with SSAA: off is PyVista's <code>enable_anti_aliasing('ssaa')</code>, which draws the volume through the slice; on is <code>enable_anti_aliasing()</code></th></tr>
-  <tr><td><img src="docs/images/volume_ssaa/off.png" width="440"></td><td><img src="docs/images/volume_ssaa/on.png" width="440"></td></tr>
+  <tr><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/volume_ssaa/off.png" width="440"></td><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/volume_ssaa/on.png" width="440"></td></tr>
   <tr><th colspan="2"><code>preset_photo_real()</code>: peeling, SSAO, shadows, SSAA</th></tr>
-  <tr><td><img src="docs/images/photo_real/off.png" width="440"></td><td><img src="docs/images/photo_real/on.png" width="440"></td></tr>
+  <tr><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/photo_real/off.png" width="440"></td><td><img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/photo_real/on.png" width="440"></td></tr>
 </table>
 
 Depth of field and Gaussian blur are VTK's passes unchanged and are not shown; depth of field is driver-sensitive.
@@ -125,7 +125,7 @@ pl.show()
 ```
 
 <p align="center">
-  <img src="docs/images/subplots.png" width="880" alt="Three linked subplots: plain, EDL, SSAO with SSAA">
+  <img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/subplots.png" width="880" alt="Three linked subplots: plain, EDL, SSAO with SSAA">
 </p>
 
 Eye-dome lighting, blur and depth of field composite over the whole window from inside one subplot in VTK ([#18849](https://gitlab.kitware.com/vtk/vtk/-/issues/18849)), which blanks or whitens the others; the chain confines them to their own tile. `pl.render_passes.components` lists the subplots configured so far.

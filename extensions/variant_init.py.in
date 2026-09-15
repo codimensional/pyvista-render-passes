@@ -1,0 +1,4 @@
+"""Compiled passes built against @PVRP_BACKEND@ (VTK @VTK_VERSION@)."""
+
+BACKEND = '@PVRP_BACKEND@'
+VTK_VERSION = '@VTK_VERSION@'

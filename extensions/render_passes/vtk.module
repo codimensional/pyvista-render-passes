@@ -1,0 +1,11 @@
+NAME
+  PyVistaRenderPasses
+LIBRARY_NAME
+  PyVistaRenderPasses
+DEPENDS
+  VTK::CommonCore
+  VTK::RenderingCore
+  VTK::RenderingOpenGL2
+DESCRIPTION
+  Render passes for PyVista: a volume-safe SSAA pass, a prop-subset filter
+  pass, and a chain assembler that composes them with the stock passes.

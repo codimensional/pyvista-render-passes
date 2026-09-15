@@ -1,0 +1,213 @@
+[build-system]
+build-backend = "scikit_build_core.build"
+# cvista-sdk supplies the CMake config for the cvista build; the stock-VTK
+# build uses Kitware's wheel SDK, fetched by scripts/fetch_vtk_sdk.py.
+requires = [
+  "cvista-sdk==9.7.0.5.*",
+  "scikit-build-core>=0.10",
+  "setuptools_scm>=8",
+]
+
+[project]
+name = "pyvista-render-passes"
+dynamic = ["version"]
+description = "Render pass chain for PyVista: volume-safe SSAA, SSAO, EDL, depth peeling, shadows, and a plotter.render_passes component."
+readme = "README.md"
+license = "MIT AND BSD-3-Clause"
+requires-python = ">=3.12"
+authors = [{ name = "CoDimensional PBC", email = "hello@codimensional.com" }]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: C++",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Visualization",
+  "Typing :: Typed",
+]
+keywords = ["pyvista", "render-pass", "ssaa", "ssao", "edl", "visualization"]
+# Each extra pins the distribution its build was compiled against (docs/design.md).
+dependencies = ["numpy>=1.24", "pyvista>=0.49"]
+
+[project.optional-dependencies]
+cvista = ["cvista-rendering==9.7.0.5.*"]
+vtk = ["vtk>=9.7,<9.8"]
+dev = ["mypy>=1.10", "pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.15"]
+
+[project.entry-points."pyvista.plotter_components"]
+render_passes = "pyvista_render_passes.component"
+
+[project.urls]
+Homepage = "https://github.com/codimensional/pyvista-render-passes"
+Issues = "https://github.com/codimensional/pyvista-render-passes/issues"
+Repository = "https://github.com/codimensional/pyvista-render-passes"
+
+[tool.scikit-build]
+build-dir = "build/{wheel_tag}"
+cmake.build-type = "Release"
+minimum-version = "0.10"
+metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+wheel.packages = ["src/pyvista_render_passes"]
+wheel.exclude = [
+  "**/*.cmake",
+  "**/*.h",
+  "**/cmake/**",
+  "include/**",
+  "share/**",
+]
+
+[tool.scikit-build.sdist]
+include = [
+  "/CMakeLists.txt",
+  "/LICENSE",
+  "/README.md",
+  "/extensions/**",
+  "/scripts/**",
+  "/src/**",
+]
+exclude = ["/.venv/**", "/build/**", "/dist/**", "/wheelhouse/**"]
+
+[tool.setuptools_scm]
+version_scheme = "release-branch-semver"
+
+# One wheel per CPython and platform carrying both builds. The VTK libraries
+# each build links stay in their own wheels, so no repair step may graft them.
+[tool.cibuildwheel]
+build = "cp312-* cp313-* cp314-*"
+skip = "cp314t-* *-musllinux_* *-win32 *-manylinux_i686"
+build-verbosity = 1
+before-build = "python {project}/scripts/fetch_vtk_sdk.py"
+test-extras = ["cvista", "vtk"]
+test-command = "python {project}/scripts/smoke.py"
+
+[tool.cibuildwheel.linux]
+manylinux-x86_64-image = "manylinux_2_28"
+manylinux-aarch64-image = "manylinux_2_28"
+repair-wheel-command = "auditwheel repair --exclude 'libvtk*' --exclude 'libviskores*' --exclude 'libgomp*' -w {dest_dir} {wheel}"
+
+# Kitware ships no arm64 wheel SDK, so macOS carries the cvista build only, as
+# one abi3 wheel.
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+build = "cp312-*"
+environment = { SKBUILD_WHEEL_PY_API = "cp312" }
+repair-wheel-command = "delocate-wheel --exclude 'libvtk' --ignore-missing-dependencies --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+# abi3audit reads VTK's own PyVTK* wrapping symbols as stable-ABI violations.
+audit-command = ""
+
+[tool.cibuildwheel.windows]
+archs = ["AMD64"]
+# Nothing to bundle: the DLLs are found at import through add_dll_directory.
+repair-wheel-command = ""
+
+# uv only rebuilds a path install when a cache key changes; the default key is
+# pyproject.toml alone, which misses every source edit.
+[tool.uv]
+cache-keys = [
+  { file = "CMakeLists.txt" },
+  { file = "extensions/**/*" },
+  { file = "pyproject.toml" },
+  { file = "src/**/*.py" },
+]
+
+[tool.coverage.run]
+branch = true
+source = ["pyvista_render_passes"]
+
+[tool.coverage.report]
+fail_under = 80
+exclude_lines = [
+  "pragma: no cover",
+  "if TYPE_CHECKING:",
+  "if __name__",
+  "\\.\\.\\.",
+]
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --strict-config"
+filterwarnings = ["error"]
+testpaths = ["tests"]
+xfail_strict = true
+
+[tool.ruff]
+line-length = 99
+src = ["src"]
+
+[tool.ruff.format]
+docstring-code-format = true
+quote-style = "single"
+
+[tool.ruff.lint]
+ignore = [
+  "COM812",
+  "CPY001",
+  "D107",
+  "D203",
+  "D212",
+  "FBT003",
+  "ISC001",
+  "TC001",
+  "TC002",
+  "TC003",
+]
+select = ["ALL"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/**" = ["D103", "INP001", "T201"]
+"scripts/render_gallery.py" = ["E501"]
+"src/pyvista_render_passes/_backend.py" = ["N816", "TID251"]
+"tests/backend.py" = ["N816"]
+"tests/**" = [
+  "ANN",
+  "ARG",
+  "D",
+  "INP001",
+  "PLC0415",
+  "PLR2004",
+  "S101",
+  "SLF001",
+]
+
+[tool.ruff.lint.flake8-quotes]
+docstring-quotes = "double"
+inline-quotes = "single"
+multiline-quotes = "double"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"cvista".msg = "Go through pyvista_render_passes._backend; both VTK distributions are supported."
+"vtk".msg = "Go through pyvista_render_passes._backend; both VTK distributions are supported."
+"vtkmodules".msg = "Go through pyvista_render_passes._backend; both VTK distributions are supported."
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+force-sort-within-sections = true
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"
+
+[tool.numpydoc_validation]
+checks = ["all", "ES01", "EX01", "GL01", "GL02", "GL03", "SA01", "SA04"]
+# The last pattern is the read-only properties; the hook wants a Returns section on them.
+exclude = [
+  '\._[^.]+$',
+  '\.__init__$',
+  '\.__repr__$',
+  '^[^.]+$',
+  '\.RenderPassComponent\.(plotter|renderer|chain|is_active)$',
+  '\.RenderPasses\.(active|components)$',
+]
+
+[tool.mypy]
+check_untyped_defs = true
+files = ["src/pyvista_render_passes"]
+python_version = "3.12"
+warn_redundant_casts = true
+warn_unused_ignores = true
+
+[[tool.mypy.overrides]]
+ignore_missing_imports = true
+module = ["pyvista.*", "vtkmodules.*"]

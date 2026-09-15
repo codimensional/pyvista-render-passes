@@ -46,7 +46,7 @@ dependencies = ["pyvista-render-passes[cvista]"]
 exclude-dependencies = ["vtk"]
 ```
 
-or, one-off, `uv pip install --excludes <(echo vtk) "pyvista-render-passes[cvista]"`. See the [PyVista install docs](https://docs.pyvista.org/getting-started/installation.html) for the details and the caveats. Wheels are published for CPython 3.12 to 3.14 on Linux (x86_64, aarch64), and for macOS (arm64) with the cvista build only, since Kitware ships no arm64 wheel SDK. Windows wheels wait on a cvista release whose DLL names the extension can link against. The stock build targets VTK 9.7. `PYVISTA_VTK_BACKEND=vtk` or `=cvista` forces the choice, as it does for PyVista; `pyvista_render_passes.BACKEND` reports it.
+or, one-off, `uv pip install --excludes <(echo vtk) "pyvista-render-passes[cvista]"`. See the [PyVista install docs](https://docs.pyvista.org/getting-started/installation.html) for the details and the caveats. Wheels are published for CPython 3.12 to 3.14 on Linux (x86_64, aarch64) and Windows (AMD64), and for macOS (arm64). The macOS wheel carries the cvista build only, since Kitware ships no arm64 wheel SDK; the Windows wheel carries the stock build only, since the cvista wheel's DLL names are mangled and cannot be linked against, so install `[vtk]` there. The stock build targets VTK 9.7. `PYVISTA_VTK_BACKEND=vtk` or `=cvista` forces the choice, as it does for PyVista; `pyvista_render_passes.BACKEND` reports it.
 
 ## Quickstart
 

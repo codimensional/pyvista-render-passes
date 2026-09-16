@@ -103,9 +103,10 @@ jobs:
           python-version: "3.12"
       - run: uv venv
       - run: uv run --no-sync python scripts/fetch_vtk_sdk.py
+      # An absolute VTK_DIR: CMake resolves a relative one against the build dir.
       - run: >-
           cmake -S extensions -B build/static -DPVRP_STATIC=ON -DPVRP_BACKEND=vtk
-          -DVTK_DIR="$(ls -d build/vtk-sdk/vtk-wheel-sdk-*/vtk-*.data/headers/cmake)"
+          -DVTK_DIR="$(uv run --no-sync python scripts/build_variants.py | awk -F'|' '$1 == "vtk" { print $2 }')"
           -DCMAKE_INSTALL_PREFIX="$PWD/build/static-prefix"
       - run: cmake --build build/static --parallel && cmake --install build/static
       - run: |

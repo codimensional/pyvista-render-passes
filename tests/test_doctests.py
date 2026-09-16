@@ -7,10 +7,10 @@ import doctest
 import pytest
 
 import pyvista_render_passes
-from pyvista_render_passes import component, passes
+from pyvista_render_passes import component, passes, providers
 
 
-@pytest.mark.parametrize('module', [pyvista_render_passes, component, passes])
+@pytest.mark.parametrize('module', [pyvista_render_passes, component, passes, providers])
 def test_docstring_examples(module):
     result = doctest.testmod(module, optionflags=doctest.NORMALIZE_WHITESPACE)
     assert result.failed == 0, result

@@ -144,29 +144,53 @@ enable_ssaa(pl, factor=2.0)  # SSAA on every renderer of a plotter
 
 ## Your own passes in the chain
 
-A package with a pass of its own registers a provider on the plotter and the component composes it into the chain at one of three seams: `'translucent'` replaces the translucent stage (and takes over depth peeling), `'base'` wraps the scene base below SSAO, `'post'` wraps the shaded frame below SSAA.
+An installed package extends `plotter.render_passes` through providers. A provider is a named unit that contributes passes at any of four stages, owns settings saved and restored with the component's, and can refuse component settings it cannot work with. Expose it through the `pyvista_render_passes.providers` entry-point group and it composes into every subplot of any plotter whose `render_passes` component exists. PyVista creates that component on first access to `pl.render_passes`, so a plotter no code touches it on renders with VTK's default pipeline and without the extension.
 
-```python
-from pyvista_render_passes import register_pass_provider
-
-
-@register_pass_provider(pl)
-class ToneMapping:
-    stage = 'post'
-
-    def build_pass(self, renderer, chain, delegate):
-        return vtkToneMappingPass()
-
-
-@register_pass_provider(pl, stage='base')
-def splat_points(renderer, chain, delegate):
-    return make_point_splat_pass(delegate)
-
-
-register_pass_provider(pl, ToneMapping())  # or an instance, directly
+```toml
+[project.entry-points."pyvista_render_passes.providers"]
+tone_mapping = "my_package.passes:ToneMapping"
 ```
 
-`build_pass` runs on every rebuild; the component releases what it returns. `'base'` providers receive the pass they must wrap as `delegate` and nest in registration order. `unregister_pass_provider(pl, ...)` takes the same object the registration did.
+```python
+from pyvista_render_passes import BasePassProvider
+
+
+class ToneMapping(BasePassProvider):
+    name = 'tone_mapping'
+    stages = ('outer',)
+
+    def __init__(self):
+        self.state = self.default_state()
+
+    def default_state(self):
+        return {'enabled': True, 'exposure': 1.0}
+
+    def get_state(self):
+        return dict(self.state)
+
+    def set_state(self, state):
+        self.state |= state
+
+    def build_pass(self, stage, renderer, chain, delegate):
+        return make_tone_mapping_pass(**self.state) if self.state['enabled'] else None
+
+    def veto(self, settings):
+        return 'reads back depth, so MSAA must stay off' if settings['msaa'] else None
+```
+
+| Stage           | Providers                   | Where the pass sits                                                                                                                        |
+| --------------- | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `'base'`        | any number, innermost first | Wraps the scene base below SSAO; receives the pass to wrap as `delegate`.                                                                  |
+| `'translucent'` | one                         | Replaces the translucent stage and takes over depth peeling.                                                                               |
+| `'post'`        | one                         | Wraps the shaded frame below SSAA, so it is supersampled.                                                                                  |
+| `'outer'`       | one                         | Wraps the SSAA-resolved frame at window resolution, below the overlay. For passes that size themselves from the window, like tone mapping. |
+
+- `pl.render_passes.providers['tone_mapping']` is the live provider, one instance per subplot. Its state is `get_state()['providers']['tone_mapping']`. `set_state` restores it, and state for a provider that is not installed, or was removed, is kept and written back out. State is plain JSON. A provider that changes a setting other than through `set_state` calls `self.invalidate()` (the handle `add_provider` binds) to rebuild on the next render. `build_pass` returns a new pass on every call.
+- A refused setting raises `SettingsVetoedError` from `enable_*`, `disable_*`, `preset_*` and `set_state` alike, and leaves `get_state()` unchanged. `set_ssaa_factor` is not vetoable, so a frame-time governor can call it every frame.
+- An entry point that fails to import, instantiate or register, and every failed auto-apply, is logged at `ERROR` and warned as a `RuntimeWarning` pointing at your code. A broken entry point is skipped and listed in `pl.render_passes.provider_errors`.
+- A pass that filters props on a channel of its own reserves one with `reserve_prop_filter_channel('my_package.overlay')`. `set_prop_filter_tag` refuses a channel nobody reserved; `'annotation'` is pre-reserved.
+- An `'outer'` pass gets SSAA underneath it (at 1x when anti-aliasing is off), whose depth is restored into the window after the outer pass, so depth reads and point-label culling behave as without it.
+- `register_pass_provider(pl, Provider)` adds a provider to one plotter's active subplot by hand; `unregister_pass_provider(pl, 'tone_mapping')` removes it. The component releases every pass a provider builds.
 
 ## Why a chain
 

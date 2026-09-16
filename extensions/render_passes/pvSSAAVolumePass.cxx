@@ -519,6 +519,45 @@ void pvSSAAVolumePass::Render(const vtkRenderState* s)
   // direction.
   if (this->ResolveDepth)
   {
+    this->RenderDepthResolve(s);
+  }
+
+  this->PostRender(s);
+  vtkOpenGLCheckErrorMacro("failed after Render");
+}
+
+void pvSSAAVolumePass::RenderDepthResolve(const vtkRenderState* s)
+{
+  if (s == nullptr || this->DepthTex == nullptr || this->DepthTex->GetWidth() == 0)
+  {
+    return;
+  }
+  vtkRenderer* r = s->GetRenderer();
+  vtkOpenGLRenderWindow* renWin = static_cast<vtkOpenGLRenderWindow*>(r->GetRenderWindow());
+  vtkOpenGLState* ostate = renWin->GetState();
+
+  int size[2];
+  s->GetWindowSize(size);
+  const int width = size[0];
+  const int height = size[1];
+  int originX = 0;
+  int originY = 0;
+  if (s->GetFrameBuffer() == nullptr)
+  {
+    int tileWidth = 0;
+    int tileHeight = 0;
+    r->GetTiledSizeAndOrigin(&tileWidth, &tileHeight, &originX, &originY);
+  }
+  const int w = static_cast<int>(this->DepthTex->GetWidth());
+  const int h = static_cast<int>(this->DepthTex->GetHeight());
+
+  vtkOpenGLState::ScopedglViewport vpsaver(ostate);
+  vtkOpenGLState::ScopedglScissor scsaver(ostate);
+  vtkOpenGLState::ScopedglEnableDisable dtsaver(ostate, GL_DEPTH_TEST);
+  vtkOpenGLState::ScopedglEnableDisable blsaver(ostate, GL_BLEND);
+  ostate->vtkglViewport(originX, originY, width, height);
+  ostate->vtkglScissor(originX, originY, width, height);
+  {
     if (this->DepthResolveProgram == nullptr)
     {
       this->DepthResolveProgram = new vtkOpenGLHelper;
@@ -572,9 +611,6 @@ void pvSSAAVolumePass::Render(const vtkRenderState* s)
       vtkErrorMacro("Couldn't build the SSAA depth-resolve shader program.");
     }
   }
-
-  this->PostRender(s);
-  vtkOpenGLCheckErrorMacro("failed after Render");
 }
 
 void pvSSAAVolumePass::ReleaseGraphicsResources(vtkWindow* w)

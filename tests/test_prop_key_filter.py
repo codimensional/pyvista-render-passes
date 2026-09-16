@@ -15,6 +15,7 @@ from pyvista_render_passes import (
     make_split_pass,
     prop_filter_tag_is_set,
     pvPropKeyFilterPass,
+    reserve_prop_filter_channel,
     set_prop_filter_tag,
 )
 from tests.backend import (
@@ -31,7 +32,7 @@ from tests.backend import (
     vtkVolumetricPass,
 )
 
-OTHER_CHANNEL = 1
+OTHER_CHANNEL = reserve_prop_filter_channel('tests.other', channel=1)
 
 _SCENE_CENTER = (-0.8, 0.0, 0.0)
 _TAGGED_CENTER = (0.8, 0.0, 0.0)

@@ -10,10 +10,13 @@ from them. Auto-apply (on by default) runs ``apply`` from a renderer
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
+import copy
 import functools
 import logging
 import math
+from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Self
 import warnings
 
@@ -35,7 +38,14 @@ from .passes import (
     pvRenderPassChain,
     set_prop_filter_tag,
 )
-from .providers import PassProvider, Stage, pass_providers
+from .providers import (
+    SINGLE_PROVIDER_STAGES,
+    STAGES,
+    PassProvider,
+    SettingsVetoedError,
+    Stage,
+    iter_entry_point_providers,
+)
 
 __all__ = ['ANNOTATION_PROP_TYPES', 'RenderPassComponent', 'RenderPasses', 'tag_scene_annotations']
 
@@ -141,6 +151,76 @@ _PASS_STATE_ATTRS = frozenset(
     }
 )
 
+# Everything a refused transaction puts back.
+_SNAPSHOT_ATTRS = (*sorted(_PASS_STATE_ATTRS), '_ssaa_factor', '_dirty')
+
+# Setter-shaped methods that are not transactions: the auto-apply toggles change
+# no setting, and a frame-time governor calls set_ssaa_factor every frame.
+_NOT_TRANSACTIONS = frozenset({'enable_auto_apply', 'disable_auto_apply', 'set_ssaa_factor'})
+_TRANSACTION_PREFIXES = ('enable_', 'disable_', 'preset_', 'set_')
+
+# Frames a warning skips so it points at the caller's code.
+_INTERNAL_PREFIXES = (str(Path(pv.__file__).parent), str(Path(__file__).parent))
+
+
+def _warn_and_log(message: str) -> None:
+    # Logged every time; the warning is deduplicated per call site by Python.
+    logger.error(message)
+    warnings.warn(message, RuntimeWarning, skip_file_prefixes=_INTERNAL_PREFIXES)
+
+
+# The chain seam each single-provider stage fills.
+_SINGLE_PASS_SEAMS: dict[Stage, str] = {
+    'translucent': 'SetTranslucentPass',
+    'post': 'SetPostPass',
+    'outer': 'SetOuterPass',
+}
+
+
+def _vetoable[F: Callable[..., Any]](method: F) -> F:
+    # Commits the setter only if every provider accepts the result; otherwise,
+    # and on any other exception, restores the snapshot and re-raises.
+    @functools.wraps(method)
+    def wrapper(  # numpydoc ignore=GL08
+        self: RenderPassComponent, *args: object, **kwargs: object
+    ) -> object:
+        if self._transaction_depth:
+            return method(self, *args, **kwargs)
+        snapshot = self._snapshot()
+        self._transaction_depth += 1
+        try:
+            result = method(self, *args, **kwargs)
+            self._check_vetoes()
+        except BaseException as exc:
+            try:
+                self._restore(snapshot)
+            except Exception as restore_exc:
+                msg = (
+                    f'{method.__name__} failed ({type(exc).__name__}: {exc}) and the previous '
+                    f'settings could not be restored; the component state is inconsistent.'
+                )
+                raise RuntimeError(msg) from restore_exc
+            raise
+        finally:
+            self._transaction_depth -= 1
+        return result
+
+    wrapper.__vetoable__ = True  # type: ignore[attr-defined]
+    return wrapper  # type: ignore[return-value]
+
+
+def _wrap_setters(cls: type) -> None:
+    # Derived from the names, so a new setter, or a subclass override, cannot
+    # skip the transaction.
+    for name, method in list(vars(cls).items()):
+        if (
+            name.startswith(_TRANSACTION_PREFIXES)
+            and name not in _NOT_TRANSACTIONS
+            and callable(method)
+            and not getattr(method, '__vetoable__', False)
+        ):
+            setattr(cls, name, _vetoable(method))
+
 
 class RenderPassComponent:
     """Render-pass settings for one renderer; ``plotter.render_passes`` hands out the active one.
@@ -191,18 +271,24 @@ class RenderPassComponent:
 
     _dirty: bool
     _auto_apply: bool
-    _auto_apply_failed: bool
     _start_event_tag: int | None
     _top: Any
     _provided: list[vtkRenderPass]
-    _providers: list[PassProvider]
+    _providers: dict[str, PassProvider]
+    _provider_errors: dict[str, Exception]
+    _pending_provider_states: dict[str, Any]
+    _transaction_depth: int
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Make a subclass's own setters transactions as well."""
+        super().__init_subclass__(**kwargs)
+        _wrap_setters(cls)
 
     def __setattr__(self, name: str, value: object) -> None:
         """Set the attribute; a pass-setting attribute also marks the component dirty."""
         super().__setattr__(name, value)
         if name in _PASS_STATE_ATTRS:
             super().__setattr__('_dirty', True)
-            super().__setattr__('_auto_apply_failed', False)
 
     def __init__(self, plotter: pv.BasePlotter, renderer: pv.Renderer | None = None) -> None:
         self._plotter = plotter
@@ -213,11 +299,13 @@ class RenderPassComponent:
         self._render_window = plotter.render_window
 
         self._auto_apply = True
-        self._auto_apply_failed = False
         self._start_event_tag = None
         self._top = None
         self._provided = []
-        self._providers = []
+        self._providers = {}
+        self._provider_errors = {}
+        self._pending_provider_states = {}
+        self._transaction_depth = 0
         # Kept across applies: it holds the built passes for release and the
         # derived/explicit split of the SSAO radius.
         self._chain = pvRenderPassChain()
@@ -225,7 +313,9 @@ class RenderPassComponent:
 
         self._render_window.SetMultiSamples(0)
         self.set_state(self.default_state())
-        self._dirty = False
+        self._register_entry_point_providers()
+        # A provider's passes need a build even though no setting changed.
+        self._dirty = bool(self._providers)
         self._install_auto_apply()
 
     # -- Lifecycle ----------------------------------------------------------
@@ -243,11 +333,13 @@ class RenderPassComponent:
                 chain.ReleaseGraphicsResources(self._plotter.render_window)
                 self._release_provided(self._plotter.render_window)
             chain.Forget()
+            self._clear_seams()
         self._top = None
         self._provided = []
         self._ssaa_factor = DEFAULT_SSAA_FACTOR
+        self._pending_provider_states = {}
         self.set_state(self.default_state())
-        self._dirty = False
+        self._dirty = bool(self._providers)
 
     def __plotter_close__(self) -> None:
         """Release the built chain's GPU resources and the auto-apply observer.
@@ -261,8 +353,15 @@ class RenderPassComponent:
             self._chain.ReleaseGraphicsResources(self._render_window)
             self._release_provided(self._render_window)
         self._chain.Forget()
+        self._clear_seams()
         self._top = None
         self._provided = []
+
+    def _clear_seams(self) -> None:
+        # The chain holds provider passes in its seams; drop them with the chain.
+        for setter in _SINGLE_PASS_SEAMS.values():
+            getattr(self._chain, setter)(None)
+        self._chain.SetBasePassProvided(False)
 
     def _release_provided(self, window: Any) -> None:  # noqa: ANN401
         # Provider-built passes are the component's to release, like the chain's own.
@@ -271,28 +370,194 @@ class RenderPassComponent:
         self._provided = []
 
     def _build_provided(
-        self, provider: PassProvider, delegate: vtkRenderPass | None
+        self, provider: PassProvider, stage: Stage, delegate: vtkRenderPass | None
     ) -> vtkRenderPass | None:
-        built = provider.build_pass(self._renderer, self._chain, delegate)
+        built = provider.build_pass(stage, self._renderer, self._chain, delegate)
         if built is None or built is delegate:
             return None
         self._provided.append(built)
         return built
 
-    def _provided_pass(
-        self, stage: Stage, providers: tuple[PassProvider, ...]
-    ) -> vtkRenderPass | None:
-        provider = next((p for p in providers if p.stage == stage), None)
-        return None if provider is None else self._build_provided(provider, None)
+    def _provided_pass(self, stage: Stage) -> vtkRenderPass | None:
+        provider = next((p for p in self._providers.values() if stage in p.stages), None)
+        return None if provider is None else self._build_provided(provider, stage, None)
 
-    def _provided_base(self, providers: list[PassProvider]) -> vtkRenderPass | None:
-        # The scene base wrapped by each 'base' provider, innermost first.
-        base = None
-        if providers:
-            base = self._chain.BuildSceneBase()
-            for provider in providers:
-                base = self._build_provided(provider, base) or base
+    def _provided_base(self) -> vtkRenderPass | None:
+        # The scene base wrapped by each 'base' provider, innermost first. The
+        # base is built as if one is coming, since the build decisions depend on
+        # it, and the claim is withdrawn when no provider wrapped anything.
+        chain = self._chain
+        providers = [p for p in self._providers.values() if 'base' in p.stages]
+        chain.SetBasePassProvided(bool(providers))
+        if not providers:
+            return None
+        scene = base = chain.BuildSceneBase()
+        for provider in providers:
+            base = self._build_provided(provider, 'base', base) or base
+        if base is scene:
+            chain.SetBasePassProvided(False)
+            return None
         return base
+
+    # -- Providers ----------------------------------------------------------
+
+    @property
+    def providers(self) -> Mapping[str, PassProvider]:
+        """The registered providers by name, in registration order; read-only."""
+        return MappingProxyType(self._providers)
+
+    @property
+    def provider_errors(self) -> Mapping[str, Exception]:
+        """Entry points skipped at creation, keyed ``'name = value'``; read-only."""
+        return MappingProxyType(self._provider_errors)
+
+    def add_provider(self, provider: PassProvider) -> Self:
+        """Register a provider on this subplot; idempotent per object.
+
+        State restored under the provider's name before it registered is
+        applied to it first. Queues a rebuild.
+
+        Parameters
+        ----------
+        provider : PassProvider
+            The provider instance.
+
+        Returns
+        -------
+        RenderPassComponent
+            Self for chaining.
+
+        Raises
+        ------
+        TypeError
+            If ``provider`` does not implement ``PassProvider``.
+
+        ValueError
+            If its name is empty or taken, a stage is unknown, or a
+            single-provider stage already has a provider.
+
+        SettingsVetoedError
+            If it refuses the current settings; nothing is registered.
+
+        """
+        if not self._accepts_new_provider(provider):
+            return self
+        name = provider.name
+        previous = copy.deepcopy(provider.get_state())
+        adopted = False
+        if name in self._pending_provider_states:
+            try:
+                provider.set_state(copy.deepcopy(self._pending_provider_states[name]))
+                adopted = True
+            except Exception as exc:  # noqa: BLE001  third-party code raises anything
+                provider.set_state(previous)
+                _warn_and_log(
+                    f'Render-pass provider {name!r} refused its restored state, which is kept '
+                    f'for a later set_state: {type(exc).__name__}: {exc}'
+                )
+        if reason := provider.veto(MappingProxyType(self._settings())):
+            provider.set_state(previous)
+            raise SettingsVetoedError(name, reason)
+        if adopted:
+            del self._pending_provider_states[name]
+        self._providers[name] = provider
+        provider.bind(self.invalidate)
+        return self.invalidate()
+
+    def _accepts_new_provider(self, provider: object) -> bool:
+        # False for a provider already registered; raises for one that cannot be.
+        if not isinstance(provider, PassProvider):
+            msg = f'{provider!r} does not implement PassProvider.'
+            raise TypeError(msg)
+        name = provider.name
+        if self._providers.get(name) is provider:
+            return False
+        if not isinstance(name, str) or not name:
+            msg = f'A provider name must be a non-empty string, got {name!r}.'
+            raise ValueError(msg)
+        if name in self._providers:
+            msg = f'A render-pass provider named {name!r} is already registered.'
+            raise ValueError(msg)
+        stages = tuple(provider.stages)
+        if unknown := [stage for stage in stages if stage not in STAGES]:
+            msg = f'Provider {name!r} names unknown stages {unknown}; expected any of {STAGES}.'
+            raise ValueError(msg)
+        for stage in stages:
+            if stage in SINGLE_PROVIDER_STAGES and any(
+                stage in other.stages for other in self._providers.values()
+            ):
+                msg = f'A {stage!r} provider is already registered; {name!r} cannot add another.'
+                raise ValueError(msg)
+        return True
+
+    def remove_provider(self, provider: object) -> Self:
+        """Unregister a provider; a no-op when absent. Queues a rebuild.
+
+        Its last state stays in :meth:`get_state` and returns to a provider
+        registered under the same name.
+
+        Parameters
+        ----------
+        provider : object
+            The provider, its class, or its name.
+
+        Returns
+        -------
+        RenderPassComponent
+            Self for chaining.
+
+        """
+        for name, registered in list(self._providers.items()):
+            by_class = isinstance(provider, type) and type(registered) is provider
+            by_name = isinstance(provider, str) and provider == name
+            if registered is provider or by_class or by_name:
+                self._pending_provider_states[name] = copy.deepcopy(registered.get_state())
+                del self._providers[name]
+                registered.bind(None)
+                self.invalidate()
+        return self
+
+    def _register_entry_point_providers(self) -> None:
+        # One broken extension must not make every plotter unconstructible, and
+        # must not be silent either: log, warn, record, skip.
+        for label, provider in iter_entry_point_providers():
+            error = provider if isinstance(provider, Exception) else None
+            if error is None:
+                try:
+                    self.add_provider(provider)  # type: ignore[arg-type]
+                except Exception as exc:  # noqa: BLE001
+                    error = exc
+            if error is not None:
+                self._provider_errors[label] = error
+                _warn_and_log(
+                    f'Render-pass provider entry point {label!r} was skipped: '
+                    f'{type(error).__name__}: {error}'
+                )
+
+    def _live_provider_states(self) -> dict[str, Any]:
+        return {name: copy.deepcopy(p.get_state()) for name, p in self._providers.items()}
+
+    def _check_vetoes(self) -> None:
+        settings = MappingProxyType(self._settings())
+        for name, provider in self._providers.items():
+            if reason := provider.veto(settings):
+                raise SettingsVetoedError(name, reason)
+
+    def _snapshot(self) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+        attrs = {name: self.__dict__[name] for name in _SNAPSHOT_ATTRS if name in self.__dict__}
+        return attrs, self._live_provider_states(), copy.deepcopy(self._pending_provider_states)
+
+    def _restore(self, snapshot: tuple[dict[str, Any], dict[str, Any], dict[str, Any]]) -> None:
+        attrs, provider_states, pending = snapshot
+        # Straight into __dict__, so the dirty flag comes back as it was.
+        self.__dict__.update(attrs)
+        if (ssaa := self._chain.GetSsaaPass()) is not None:
+            ssaa.SetSupersampleFactor(self._ssaa_factor)
+            ssaa.SetPrimitiveScaleFactor(self._ssaa_factor)
+        for name, state in provider_states.items():
+            if (provider := self._providers.get(name)) is not None:
+                provider.set_state(state)
+        self._pending_provider_states = pending
 
     @property
     def plotter(self) -> pv.BasePlotter:
@@ -350,7 +615,6 @@ class RenderPassComponent:
 
         """
         self._dirty = True
-        self._auto_apply_failed = False
         return self
 
     def resync_derived_ssao(self) -> bool:
@@ -388,17 +652,16 @@ class RenderPassComponent:
         if self._annotation_bypass and self._edl:
             tag_scene_annotations(self._renderer)
 
-        if not self._auto_apply or not self._dirty or self._auto_apply_failed:
+        if not self._auto_apply or not self._dirty:
             return
+        # Retried on every render while it fails, and reported every time.
         try:
             self.apply()
         except Exception as exc:  # noqa: BLE001  must not escape into the render loop
-            self._auto_apply_failed = True
-            warnings.warn(
-                f'render_passes auto-apply failed and was skipped: {exc}. '
-                'Fix the settings and re-render, or call apply() directly to see the error.',
-                RuntimeWarning,
-                stacklevel=2,
+            _warn_and_log(
+                f'render_passes auto-apply failed; the renderer runs without the chain until '
+                f'it succeeds: {type(exc).__name__}: {exc}. Fix the settings, or call apply() '
+                'to see the traceback.'
             )
 
     # -- Settings -----------------------------------------------------------
@@ -811,7 +1074,15 @@ class RenderPassComponent:
         run with the GL context current. Resets the renderer's depth-peeling
         and FXAA flags and the window's multisample count to what the settings
         say.
+
+        Raises
+        ------
+        SettingsVetoedError
+            If a provider refuses the current settings, which happens when a
+            provider was changed directly into a state that conflicts with
+            them. Nothing is rebuilt.
         """
+        self._check_vetoes()
         renderer = self._renderer
         rw = self._render_window
         # Release before SetPass(None) drops the last reference: a pass
@@ -825,12 +1096,10 @@ class RenderPassComponent:
 
         chain = self._chain
         self._push_settings(chain)
-        providers = pass_providers(self._plotter)
         # The single-pass seams are set before the build decisions are read.
-        chain.SetTranslucentPass(self._provided_pass('translucent', providers))
-        chain.SetPostPass(self._provided_pass('post', providers))
-        base_providers = [p for p in providers if p.stage == 'base']
-        chain.SetBasePassProvided(bool(base_providers))
+        for stage, setter in _SINGLE_PASS_SEAMS.items():
+            getattr(chain, setter)(self._provided_pass(stage))
+        base = self._provided_base()
         has_custom_passes = chain.GetRequiresCustomPassChain()
 
         if chain.GetUsesBuiltinDepthPeeling():
@@ -850,7 +1119,7 @@ class RenderPassComponent:
                     'EDL, or call disable_annotation_bypass().'
                 )
 
-        top = chain.Build(renderer, self._provided_base(base_providers))
+        top = chain.Build(renderer, base)
         self._top = top
         if top is not None:
             renderer.SetPass(top)
@@ -875,7 +1144,6 @@ class RenderPassComponent:
 
         renderer.Modified()
         self._dirty = False
-        self._auto_apply_failed = False
         logger.debug('Render pass pipeline applied: %s', self.describe())
 
     # -- Presets ------------------------------------------------------------
@@ -969,7 +1237,9 @@ class RenderPassComponent:
         """Return every setting as a JSON-serializable dict.
 
         ``ssao_radius`` and ``ssao_bias`` are ``None`` while derived, so a
-        restored state cannot pin a value nobody chose.
+        restored state cannot pin a value nobody chose. ``'providers'`` maps
+        each provider's name to its own state, including state restored for a
+        provider that is not registered here, so a save cycle does not lose it.
 
         Returns
         -------
@@ -977,6 +1247,10 @@ class RenderPassComponent:
             Settings keyed as :meth:`default_state`.
 
         """
+        providers = copy.deepcopy(self._pending_provider_states) | self._live_provider_states()
+        return {**self._settings(), 'providers': providers}
+
+    def _settings(self) -> dict[str, Any]:
         return {
             'depth_peeling': self._depth_peeling,
             'depth_peeling_max_peels': self._depth_peeling_max_peels,
@@ -1020,7 +1294,12 @@ class RenderPassComponent:
         return number
 
     def set_state(self, state: dict[str, Any]) -> Self:  # noqa: C901, PLR0912
-        """Restore settings from a dict. Unknown keys are ignored.
+        """Restore settings from a dict, atomically. Unknown keys are ignored.
+
+        State under ``'providers'`` for a name with no registered provider is
+        kept rather than dropped or refused: :meth:`get_state` reports it, and
+        a provider registering under that name later receives it. A saved
+        state stays loadable on a machine without the extension that wrote it.
 
         Parameters
         ----------
@@ -1037,6 +1316,12 @@ class RenderPassComponent:
         ------
         ValueError
             If the state enables both SSAO and depth of field.
+
+        TypeError
+            If ``state['providers']`` is not a mapping.
+
+        SettingsVetoedError
+            If a provider refuses the resulting settings.
 
         """
         if 'depth_peeling_max_peels' in state:
@@ -1087,18 +1372,38 @@ class RenderPassComponent:
                 )
             else:
                 self._ssao = False
+
+        provider_states = state.get('providers')
+        if provider_states:
+            if not isinstance(provider_states, Mapping):
+                msg = (
+                    "state['providers'] must map provider names to states, "
+                    f'got {type(provider_states).__name__}.'
+                )
+                raise TypeError(msg)
+            for name, provider_state in provider_states.items():
+                if (provider := self._providers.get(name)) is None:
+                    self._pending_provider_states[name] = copy.deepcopy(provider_state)
+                else:
+                    provider.set_state(provider_state)
+            self.invalidate()
         return self
 
-    @classmethod
-    def default_state(cls) -> dict[str, Any]:
+    def default_state(self) -> dict[str, Any]:
         """Return the default settings; the key set :meth:`get_state` uses.
 
         Returns
         -------
         dict[str, Any]
-            Defaults for every setting.
+            Defaults for every setting, with each registered provider's
+            defaults under ``'providers'``.
 
         """
+        providers = {name: p.default_state() for name, p in self._providers.items()}
+        return {**self._default_settings(), 'providers': providers}
+
+    @staticmethod
+    def _default_settings() -> dict[str, Any]:
         return {
             'depth_peeling': False,
             'depth_peeling_max_peels': 8,
@@ -1120,6 +1425,10 @@ class RenderPassComponent:
             'blur': False,
             'hidden_line_removal': False,
         }
+
+
+# Every setter is a transaction a provider can refuse.
+_wrap_setters(RenderPassComponent)
 
 
 @pv.register_plotter_component('render_passes')
@@ -1151,8 +1460,11 @@ class RenderPasses:
     def __init__(self, plotter: pv.BasePlotter) -> None:
         self._plotter = plotter
         self._components: dict[pv.Renderer, RenderPassComponent] = {}
-        # The active subplot's component exists as soon as the plotter's does,
-        # so its window-level effects (multisamples off) hold from first touch.
+        # Every subplot's component exists as soon as this one does, so the
+        # window-level effects (multisamples off) hold from first touch and an
+        # installed provider composes into subplots nobody configured.
+        for renderer in plotter.renderers:
+            self._components[renderer] = RenderPassComponent(plotter, renderer)
         _ = self.active
 
     @property

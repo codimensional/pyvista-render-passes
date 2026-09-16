@@ -18,6 +18,7 @@ camera -> lights -> [opaque | shadow maps]
        -> gaussian blur
        -> (caller's post pass, optional)
        -> SSAA
+       -> (caller's outer pass, optional)
        -> overlay
 ```
 
@@ -48,8 +49,9 @@ camera -> lights -> [opaque | shadow maps]
   installs no pass at all. As soon as any other pass is on, the renderer's
   built-in peeling is bypassed by the custom pass, so the chain inserts a
   `vtkDualDepthPeelingPass` of its own.
-- **SSAA is outermost.** It supersamples everything below it, including the
-  post-processing passes, and resolves to the window size last.
+- **SSAA is the outermost built-in pass.** It supersamples everything below it,
+  including the post-processing passes, and resolves to the window size. Only
+  a caller's outer pass wraps it.
   It is also built at 1x whenever EDL, blur or depth of field is on and
   anti-aliasing is off: those passes clear and composite the whole window
   from inside their renderer's tile, which blanks or whitens every other
@@ -83,7 +85,7 @@ camera -> lights -> [opaque | shadow maps]
 
 ## Passes from other packages
 
-Three seams take a pass the chain does not know about, so a package with its
+Four seams take a pass the chain does not know about, so a package with its
 own translucency, point splatting or tone mapping composes into the same graph
 instead of rebuilding it:
 
@@ -97,18 +99,108 @@ instead of rebuilding it:
   peeling.
 - **`PostPass`** wraps the shaded frame between the blur and SSAA, so it is
   supersampled with everything else.
+- **`OuterPass`** wraps the SSAA-resolved frame, below the overlay stage. Its
+  delegate has already resolved to the window, so a pass that sizes its
+  framebuffer from the logical window (tone mapping) covers the whole frame;
+  as a `PostPass` it would cover `1/factor²` of the SSAA framebuffer. Wrapping
+  the scene directly loses the window depth: a colour-only outer pass
+  (`vtkGaussianBlurPass`) left 0.0% of the window depth finite against 11.0%
+  without it, because the SSAA depth resolve landed in the outer pass's
+  framebuffer. `Build` therefore forces SSAA at 1x under an outer pass and
+  appends a window depth restore that re-runs
+  `pvSSAAVolumePass::RenderDepthResolve` after it. Without the 1x SSAA there
+  is no depth to restore, and the depth and point-label tests fail with
+  anti-aliasing off. An outer pass does not composite over a neighbouring
+  subplot tile even without that SSAA. An earlier probe reported a 1.3%
+  change in the other tile, but it came from the component setting the
+  window's multisamples to 0 under the default theme's 8. With the component
+  created in both renders the other tile changes by 0 pixels, so there is no
+  tile test.
 
-On the Python side a `PassProvider` (`stage` plus `build_pass(renderer, chain,
-delegate)`) is registered on the active subplot with `register_pass_provider`, given an
-instance, a class, or a bare `build_pass` function with its stage, directly or
-as a decorator. The component keeps the providers, so one that holds its
-plotter is an ordinary reference cycle. The
-component composes the registered providers on every rebuild and releases
-what they built alongside the chain's own passes, so a provider holds no GL
-resources of its own. `'translucent'` and `'post'` admit one provider each;
-`'base'` providers nest in registration order, innermost first. Registration
-queues a rebuild, so a provider added after the first render takes effect on
-the next one.
+### Providers
+
+A `PassProvider` is one named unit of an extension: `name`, `stages`,
+`build_pass(stage, renderer, chain, delegate)`, `default_state` / `get_state` /
+`set_state`, and `veto(settings)`. `BasePassProvider` makes every member but
+`name` a no-op.
+
+- **Discovery.** Every `RenderPassComponent`, one per subplot, instantiates the
+  `pyvista_render_passes.providers` entry points when it is created, and
+  `plotter.render_passes` creates the component of every subplot at once. Each
+  subplot owns its provider's state. The entry point names a zero-argument
+  callable. PyVista 0.49 creates a plotter component only on first attribute
+  access (`_CachedComponent.__get__`), with no creation or first-render hook,
+  so a plotter on which nothing touches `render_passes` composes no provider
+  (`test_an_installed_provider_applies_without_touching_render_passes` is a
+  strict xfail). Patching `Plotter.__init__` was rejected. The clean fix is
+  upstream: an `eager=True` flag on `register_plotter_component` that
+  `BasePlotter.__init__` honours once its renderers exist, or a
+  `__plotter_first_render__` hook called from `_on_first_render_request`.
+  `register_pass_provider` stays for a provider scoped to one plotter and goes
+  through the same `add_provider` checks.
+- **A broken entry point warns and is skipped.** A failure to import,
+  instantiate or register (not a provider, duplicate name, taken
+  single-provider stage, veto of the defaults) is logged at `ERROR`, warned as
+  a `RuntimeWarning` naming `name = value` whose stack level skips PyVista and
+  this package, and recorded in `provider_errors`. A failed auto-apply is
+  reported the same way on every render it is retried, with no latch that
+  silences it. Raising was rejected: one broken extension would make every
+  `pv.Plotter` in the environment unusable. A warning alone was rejected
+  because Python shows it once per call site.
+- **State.** `get_state()['providers'][name]` is each provider's own state.
+  `default_state()` is an instance method because its key set depends on what
+  is installed. State for a name with no provider is kept, written back out by
+  `get_state`, and handed to a provider that registers under that name later.
+  Raising was rejected because a saved scene would not load on a machine
+  without the extension. Dropping was rejected because one save there would
+  erase the extension's settings. A removed provider's last state is kept the
+  same way. State is plain JSON. `add_provider` binds the component's
+  `invalidate` through `provider.bind`, and a provider calls it after changing
+  a setting other than through `set_state`. Comparing `get_state()` on every
+  render was rejected: NaN never compares equal, so it rebuilt every frame;
+  a numpy array raised from inside the observer; and a live uniform change
+  forced a rebuild. A provider whose `set_state` refuses its pending state is
+  put back to its previous state, registered, and the state stays pending
+  with a warning.
+- **Vetoes.** Every `enable_*`, `disable_*`, `preset_*` and `set_*` method is
+  a transaction. The component snapshots its settings and provider states,
+  runs the setter, and asks each provider's `veto` about the result. On a
+  refusal, or any other exception, it restores the snapshot and re-raises, so
+  `set_state` is atomic too. A restore that itself fails raises `RuntimeError`
+  from the restore error. The wrapping is derived from the method names and
+  reapplied in `__init_subclass__`, so neither a new setter nor a subclass
+  override skips it, and a test fails on any public method outside a named
+  allowlist that is not wrapped. `set_ssaa_factor` is on that allowlist,
+  because a frame-time governor calls it every frame. Vetoing only in `apply`
+  was rejected: the
+  refused value would already be in `get_state()` and would fail every
+  auto-apply. `apply` still checks, for a provider changed directly into a
+  conflict, and registration refuses a provider that vetoes the current
+  settings.
+- **Contributing nothing claims nothing.** `apply` builds the provider passes
+  before reading the build decisions, and only marks a base as provided when a
+  `'base'` provider wrapped something. Providers that all return `None` leave
+  the renderer on VTK's default pipeline (or built-in depth peeling). Close
+  and deep clean clear the translucent, post and outer seams.
+- **Stages.** `'translucent'`, `'post'` and `'outer'` admit one provider each;
+  `'base'` providers nest in registration order, innermost first. The
+  component releases what a provider builds alongside the chain's own passes,
+  so a provider holds no GL resources, and one that holds its plotter is an
+  ordinary reference cycle.
+
+### Prop-filter channels
+
+`pvPropKeyFilterPass` partitions props on one bit of a per-prop bitmask
+(channels 0 to 30). Two packages that pick a bit by hand can split each
+other's props, so `reserve_prop_filter_channel(name)` hands bits out from a
+process-wide registry. It is idempotent per name, takes the lowest free bit by
+default, and raises when an explicit `channel=` is held under another name or
+when every bit is taken. `'annotation'` is pre-reserved for
+`CHANNEL_ANNOTATION`, which the annotation split filters on. The registry is
+process-wide, not per plotter, because the tag lives on the prop and a prop can
+be added to any plotter. Reservation is enforced: `set_prop_filter_tag` raises
+on a channel nobody reserved. Queries and pass construction do not check,
+because reading a channel cannot clash with another package.
 
 ## SSAO radius
 
@@ -146,8 +238,8 @@ stage's point labels) stay valid under supersampling.
 ## What is not here
 
 - **Tone mapping.** `vtkToneMappingPass` is not part of the cvista
-  distribution this package builds against, so the chain has no tone-mapping
-  stage. It can be reintroduced above SSAA when the dependency provides it.
+  distribution this package builds against, so the chain builds no
+  tone-mapping pass of its own. A provider supplies one at the `'outer'` stage.
 - **FXAA.** The component turns `vtkRenderer::UseFXAA` off on every apply.
   SSAA replaces it; enabling both blurs twice.
 - **Image baselines.** The pixel tests measure properties of the frame

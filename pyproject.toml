@@ -215,7 +215,7 @@ exclude = [
   '\.__init__$',
   '\.__repr__$',
   '^[^.]+$',
-  '\.RenderPassComponent\.(plotter|renderer|chain|is_active)$',
+  '\.RenderPassComponent\.(plotter|renderer|chain|is_active|providers|provider_errors)$',
   '\.RenderPasses\.(active|components)$',
 ]
 

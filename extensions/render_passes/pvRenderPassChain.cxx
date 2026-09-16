@@ -15,6 +15,7 @@
 #include "vtkOpaquePass.h"
 #include "vtkOverlayPass.h"
 #include "vtkRenderPassCollection.h"
+#include "vtkRenderState.h"
 #include "vtkRenderer.h"
 #include "vtkSSAOPass.h"
 #include "vtkSequencePass.h"
@@ -78,6 +79,32 @@ vtkSmartPointer<vtkSequencePass> MakeAnnotationSplit(vtkRenderPass* scenePass)
   sequence->SetPasses(stages);
   return sequence;
 }
+
+// An outer pass renders its delegate, SSAA included, into a framebuffer of its
+// own, so the depth SSAA resolved lands there and the window keeps none. This
+// resolves it again into the window once the outer pass has composited.
+class pvWindowDepthRestorePass : public vtkRenderPass
+{
+public:
+  static pvWindowDepthRestorePass* New();
+  vtkTypeMacro(pvWindowDepthRestorePass, vtkRenderPass);
+
+  void Render(const vtkRenderState* s) override
+  {
+    this->NumberOfRenderedProps = 0;
+    if (this->Ssaa != nullptr)
+    {
+      this->Ssaa->RenderDepthResolve(s);
+    }
+  }
+
+  vtkSmartPointer<pvSSAAVolumePass> Ssaa;
+
+protected:
+  pvWindowDepthRestorePass() = default;
+  ~pvWindowDepthRestorePass() override = default;
+};
+vtkStandardNewMacro(pvWindowDepthRestorePass);
 
 } // namespace
 
@@ -188,7 +215,7 @@ bool pvRenderPassChain::GetRequiresCustomPassChain() const
 {
   return this->Shadows || this->EDL || this->DepthOfField || this->Blur || this->SSAO ||
     this->AntiAliasing || this->BasePassProvided || this->TranslucentPass != nullptr ||
-    this->PostPass != nullptr;
+    this->PostPass != nullptr || this->OuterPass != nullptr;
 }
 
 //------------------------------------------------------------------------------
@@ -433,7 +460,10 @@ vtkRenderPass* pvRenderPassChain::Build(vtkRenderer* renderer, vtkRenderPass* ba
 
   // The screen-space passes composite over the whole window, so on a subplot
   // they wipe the other tiles; the SSAA pass at 1x confines them to their own.
-  const bool screenSpace = this->EDL || this->DepthOfField || this->Blur;
+  // An outer pass gets the pass too, for its depth rather than its tile: the
+  // window depth restore after the outer pass re-resolves the SSAA pass's depth.
+  const bool screenSpace =
+    this->EDL || this->DepthOfField || this->Blur || this->OuterPass != nullptr;
   if (this->AntiAliasing || screenSpace)
   {
     vtkNew<pvSSAAVolumePass> ssaa;
@@ -446,6 +476,13 @@ vtkRenderPass* pvRenderPassChain::Build(vtkRenderer* renderer, vtkRenderPass* ba
     this->SsaaPass = ssaa;
   }
 
+  // Outside SSAA, so a pass sized from the logical window covers all of it.
+  if (this->OuterPass != nullptr)
+  {
+    this->OuterPass->SetDelegatePass(current);
+    current = this->OuterPass;
+  }
+
   this->ScenePassOwned = current;
   this->ScenePass = current;
 
@@ -453,6 +490,12 @@ vtkRenderPass* pvRenderPassChain::Build(vtkRenderer* renderer, vtkRenderPass* ba
   vtkNew<vtkOverlayPass> overlay;
   vtkNew<vtkRenderPassCollection> top;
   top->AddItem(current);
+  if (this->OuterPass != nullptr && this->SsaaPassOwned != nullptr)
+  {
+    vtkNew<pvWindowDepthRestorePass> restore;
+    restore->Ssaa = this->SsaaPassOwned;
+    top->AddItem(restore);
+  }
   top->AddItem(overlay);
   vtkNew<vtkSequencePass> sequence;
   sequence->SetPasses(top);
@@ -522,5 +565,6 @@ void pvRenderPassChain::PrintSelf(ostream& os, vtkIndent indent)
   os << indent << "SsaaFactor: " << this->SsaaFactor << "\n";
   os << indent << "TranslucentPass: " << this->TranslucentPass.GetPointer() << "\n";
   os << indent << "PostPass: " << this->PostPass.GetPointer() << "\n";
+  os << indent << "OuterPass: " << this->OuterPass.GetPointer() << "\n";
   os << indent << "BasePassProvided: " << this->BasePassProvided << "\n";
 }

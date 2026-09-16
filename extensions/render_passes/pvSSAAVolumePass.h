@@ -100,6 +100,15 @@ public:
   vtkBooleanMacro(ResolveDepth, bool);
   ///@}
 
+  /**
+   * Resolve the depth of this pass's last render into the current draw
+   * framebuffer, over the renderer's tile when `s` has no framebuffer. `Render`
+   * calls it when `ResolveDepth` is on; a chain calls it again after a pass that
+   * wrapped this one rendered it into a framebuffer of its own. A no-op before
+   * the first render.
+   */
+  void RenderDepthResolve(const vtkRenderState* s);
+
 protected:
   pvSSAAVolumePass();
   ~pvSSAAVolumePass() override;

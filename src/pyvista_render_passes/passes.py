@@ -45,6 +45,7 @@ __all__ = [
     'pvPropKeyFilterPass',
     'pvRenderPassChain',
     'pvSSAAVolumePass',
+    'reserve_prop_filter_channel',
     'set_prop_filter_tag',
 ]
 
@@ -53,6 +54,9 @@ __all__ = [
 CHANNEL_ANNOTATION: int = pvPropKeyFilterPass.ChannelAnnotation
 
 _MAX_CHANNEL = pvPropKeyFilterPass.ChannelMaximum
+
+# Process-wide: a tag lives on the prop, and one prop can be in any plotter.
+_RESERVED_CHANNELS: dict[str, int] = {'annotation': CHANNEL_ANNOTATION}
 
 _MIN_SSAA_FACTOR = 1.0
 _MAX_SSAA_FACTOR = 4.0
@@ -72,6 +76,74 @@ def _validate_channel(channel: int) -> int:
     if not CHANNEL_ANNOTATION <= channel <= _MAX_CHANNEL:
         msg = f'channel must be in [{CHANNEL_ANNOTATION}, {_MAX_CHANNEL}], got {channel}.'
         raise ValueError(msg)
+    return channel
+
+
+def reserve_prop_filter_channel(name: str, *, channel: int | None = None) -> int:
+    """Reserve a prop-filter channel under a name; idempotent per name.
+
+    Two packages tagging props on the same bit would split each other's
+    props, so a package that filters on a channel of its own reserves it here
+    first. ``'annotation'`` is pre-reserved for :data:`CHANNEL_ANNOTATION`,
+    which is never handed out under any other name.
+
+    Parameters
+    ----------
+    name : str
+        Reservation key, conventionally prefixed with the package name.
+
+    channel : int, optional
+        A specific channel to claim. ``None`` takes the lowest free one.
+
+    Returns
+    -------
+    int
+        The channel reserved under ``name``.
+
+    Raises
+    ------
+    ValueError
+        If ``name`` is empty, ``channel`` is out of range or held under
+        another name, or ``name`` already holds a different channel.
+
+    RuntimeError
+        If every channel is reserved.
+
+    Examples
+    --------
+    >>> from pyvista_render_passes import CHANNEL_ANNOTATION, reserve_prop_filter_channel
+    >>> overlay = reserve_prop_filter_channel('example_package.overlay')
+    >>> overlay == reserve_prop_filter_channel('example_package.overlay')
+    True
+    >>> overlay != CHANNEL_ANNOTATION
+    True
+
+    """
+    if not isinstance(name, str) or not name:
+        msg = f'name must be a non-empty string, got {name!r}.'
+        raise ValueError(msg)
+    held = _RESERVED_CHANNELS.get(name)
+    if channel is not None:
+        channel = _validate_channel(channel)
+        owner = next((key for key, value in _RESERVED_CHANNELS.items() if value == channel), None)
+        if owner not in {None, name}:
+            msg = f'Prop-filter channel {channel} is already reserved as {owner!r}.'
+            raise ValueError(msg)
+        if held not in {None, channel}:
+            msg = f'{name!r} already holds prop-filter channel {held}, not {channel}.'
+            raise ValueError(msg)
+    elif held is not None:
+        return held
+    else:
+        taken = set(_RESERVED_CHANNELS.values())
+        channel = next((c for c in range(_MAX_CHANNEL + 1) if c not in taken), None)
+        if channel is None:
+            msg = (
+                f'All {_MAX_CHANNEL + 1} prop-filter channels are reserved: '
+                f'{sorted(_RESERVED_CHANNELS)}.'
+            )
+            raise RuntimeError(msg)
+    _RESERVED_CHANNELS[name] = channel
     return channel
 
 
@@ -287,10 +359,18 @@ def set_prop_filter_tag(
     Raises
     ------
     ValueError
-        If ``channel`` is out of range.
+        If ``channel`` is out of range or was never reserved with
+        :func:`reserve_prop_filter_channel`.
 
     """
-    pvPropKeyFilterPass.SetPropMatching(prop, tagged, _validate_channel(channel))
+    channel = _validate_channel(channel)
+    if channel not in _RESERVED_CHANNELS.values():
+        msg = (
+            f'Prop-filter channel {channel} is not reserved; take one from '
+            'reserve_prop_filter_channel() so no other package tags on it.'
+        )
+        raise ValueError(msg)
+    pvPropKeyFilterPass.SetPropMatching(prop, tagged, channel)
 
 
 def clear_prop_filter_tag(prop: vtkProp, *, channel: int = CHANNEL_ANNOTATION) -> None:

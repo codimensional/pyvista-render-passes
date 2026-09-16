@@ -1,17 +1,18 @@
-"""Passes from other packages, composed into the chain by the component.
+"""Passes, settings and setting vetoes from other packages, composed by the component.
 
-A provider registers itself on a plotter; :class:`RenderPassComponent`
-composes whatever is registered when it rebuilds, at one of three seams of
-:class:`pvRenderPassChain`. ``'translucent'`` replaces the translucent stage
-(one provider at most), ``'base'`` wraps the scene base below every
-screen-space pass (any number, innermost first), ``'post'`` wraps the shaded
-frame below SSAA (one at most). The component releases what a provider builds.
+A provider is one named unit of an extension: passes at any of the stages in
+:data:`STAGES`, settings nested under ``get_state()['providers'][name]``, and
+an optional veto over component settings. Installed packages expose providers
+through the :data:`ENTRY_POINT_GROUP` entry-point group; every component
+instantiates its own when it is created. A failing entry point warns and is
+skipped. ``docs/design.md`` covers the seams and the failure policy.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import TYPE_CHECKING, Literal, Protocol, overload, runtime_checkable
+from collections.abc import Callable, Iterator, Mapping
+from importlib.metadata import entry_points
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, overload, runtime_checkable
 
 if TYPE_CHECKING:
     from pyvista import Renderer
@@ -20,45 +21,86 @@ if TYPE_CHECKING:
     from ._backend import pvRenderPassChain, vtkRenderPass
 
 __all__ = [
+    'ENTRY_POINT_GROUP',
+    'SINGLE_PROVIDER_STAGES',
+    'STAGES',
+    'BasePassProvider',
     'PassProvider',
+    'SettingsVetoedError',
     'Stage',
-    'pass_providers',
+    'iter_entry_point_providers',
     'register_pass_provider',
     'unregister_pass_provider',
 ]
 
-Stage = Literal['base', 'translucent', 'post']
-BuildPass = Callable[
-    ['Renderer', 'pvRenderPassChain', 'vtkRenderPass | None'], 'vtkRenderPass | None'
-]
+#: Entry-point group scanned when a component is created.
+ENTRY_POINT_GROUP = 'pyvista_render_passes.providers'
+
+Stage = Literal['base', 'translucent', 'post', 'outer']
+
+#: Every stage, innermost first.
+STAGES: tuple[Stage, ...] = ('base', 'translucent', 'post', 'outer')
+
+#: Stages whose chain seam holds one pass, so one provider.
+SINGLE_PROVIDER_STAGES: frozenset[Stage] = frozenset({'translucent', 'post', 'outer'})
+
+
+class SettingsVetoedError(ValueError):
+    """A provider refused a component setting; the component state is unchanged.
+
+    Parameters
+    ----------
+    provider : str
+        Name of the provider that refused.
+
+    reason : str
+        The provider's explanation.
+
+    """
+
+    def __init__(self, provider: str, reason: str) -> None:
+        self.provider = provider
+        self.reason = reason
+        super().__init__(f'Render-pass provider {provider!r} refused the settings: {reason}')
 
 
 @runtime_checkable
 class PassProvider(Protocol):
-    """A package that contributes one pass to the chain.
+    """One named unit of an extension: passes, settings and setting vetoes.
+
+    :class:`BasePassProvider` implements every member but ``name`` as a no-op.
 
     Examples
     --------
-    >>> from pyvista_render_passes.providers import PassProvider
-    >>> class Passthrough:
-    ...     stage = 'base'
+    >>> from pyvista_render_passes import BasePassProvider, PassProvider
+    >>> class Passthrough(BasePassProvider):
+    ...     name = 'passthrough'
+    ...     stages = ('base',)
     ...
-    ...     def build_pass(self, renderer, chain, delegate):
+    ...     def build_pass(self, stage, renderer, chain, delegate):
     ...         return delegate
     >>> isinstance(Passthrough(), PassProvider)
     True
 
     """
 
-    stage: Stage
+    name: str
+    stages: tuple[Stage, ...]
 
     def build_pass(
-        self, renderer: Renderer, chain: pvRenderPassChain, delegate: vtkRenderPass | None
+        self,
+        stage: Stage,
+        renderer: Renderer,
+        chain: pvRenderPassChain,
+        delegate: vtkRenderPass | None,
     ) -> vtkRenderPass | None:
-        """Build the pass for one chain rebuild.
+        """Build the pass for one stage of one chain rebuild.
 
         Parameters
         ----------
+        stage : {'base', 'translucent', 'post', 'outer'}
+            One of ``stages``; called once for each per rebuild.
+
         renderer : pyvista.Renderer
             Renderer the chain is being built for.
 
@@ -66,69 +108,253 @@ class PassProvider(Protocol):
             The chain, for its settings (peel count, SSAA factor, ...).
 
         delegate : vtkRenderPass, optional
-            For the ``'base'`` stage, the pass the result must render; ``None``
-            for the other stages, whose delegate the chain wires itself.
+            For ``'base'``, the pass the result must render; ``None`` for the
+            other stages, whose delegate the chain wires itself.
 
         Returns
         -------
         vtkRenderPass or None
-            The pass, or ``None`` (or ``delegate``) to contribute nothing.
+            A new pass on every call, or ``None`` (or ``delegate``) to
+            contribute nothing. Never a cached instance: the component releases
+            it on the next rebuild, and a pass shared across subplots is wired
+            into two chains at once. ``'post'`` and ``'outer'`` need a
+            ``vtkImageProcessingPass``.
+
+        """
+        ...
+
+    def bind(self, invalidate: Callable[[], object] | None) -> None:
+        """Receive the handle that queues a rebuild, or ``None`` when removed.
+
+        A setting changed through the component's ``set_state`` rebuilds on
+        its own; call the handle after changing one any other way.
+
+        Parameters
+        ----------
+        invalidate : callable or None
+            The owning component's ``invalidate``.
+
+        """
+        ...
+
+    def default_state(self) -> dict[str, Any]:
+        """Return the provider's default settings.
+
+        State is plain JSON (dicts, lists, strings, finite numbers, booleans,
+        ``None``): the component deep-copies it and the host saves it.
+
+        Returns
+        -------
+        dict[str, Any]
+            JSON-serializable settings.
+
+        """
+        ...
+
+    def get_state(self) -> dict[str, Any]:
+        """Return the provider's current settings.
+
+        Returns
+        -------
+        dict[str, Any]
+            JSON-serializable settings, keyed as ``default_state``.
+
+        """
+        ...
+
+    def set_state(self, state: Mapping[str, Any]) -> None:
+        """Restore settings; missing keys keep their current value.
+
+        Parameters
+        ----------
+        state : Mapping[str, Any]
+            Settings as returned by ``get_state``.
+
+        """
+        ...
+
+    def veto(self, settings: Mapping[str, Any]) -> str | None:
+        """Refuse component settings before they take effect.
+
+        Parameters
+        ----------
+        settings : Mapping[str, Any]
+            The component settings about to be committed, keyed as
+            ``RenderPassComponent.get_state()`` without ``'providers'``.
+
+        Returns
+        -------
+        str or None
+            Why the settings are refused, or ``None`` to accept them.
 
         """
         ...
 
 
-class _FunctionProvider:
-    def __init__(self, stage: Stage, build_pass: BuildPass) -> None:
-        self.stage = stage
-        self.build_pass = build_pass
+class BasePassProvider:
+    """No-op implementation of every :class:`PassProvider` member but ``name``.
+
+    Examples
+    --------
+    A settings-only provider that needs the depth buffer single-sampled.
+
+    >>> import pyvista as pv
+    >>> from pyvista_render_passes import BasePassProvider, register_pass_provider
+    >>> class DepthReader(BasePassProvider):
+    ...     name = 'depth_reader'
+    ...
+    ...     def veto(self, settings):
+    ...         return 'reads back depth, so MSAA must stay off' if settings['msaa'] else None
+    >>> pl = pv.Plotter(off_screen=True)
+    >>> _ = register_pass_provider(pl, DepthReader)
+    >>> pl.render_passes.enable_msaa()
+    Traceback (most recent call last):
+    ...
+    pyvista_render_passes.providers.SettingsVetoedError: Render-pass provider 'depth_reader' refused the settings: reads back depth, so MSAA must stay off
+
+    """  # noqa: E501
+
+    name: ClassVar[str]
+    stages: tuple[Stage, ...] = ()
+    _invalidate: Callable[[], object] | None = None
+
+    def build_pass(
+        self,
+        stage: Stage,  # noqa: ARG002
+        renderer: Renderer,  # noqa: ARG002
+        chain: pvRenderPassChain,  # noqa: ARG002
+        delegate: vtkRenderPass | None,  # noqa: ARG002
+    ) -> vtkRenderPass | None:
+        """Contribute nothing.
+
+        Parameters
+        ----------
+        stage : {'base', 'translucent', 'post', 'outer'}
+            Unused.
+
+        renderer : pyvista.Renderer
+            Unused.
+
+        chain : pvRenderPassChain
+            Unused.
+
+        delegate : vtkRenderPass, optional
+            Unused.
+
+        Returns
+        -------
+        None
+            Always.
+
+        """
+        return None
+
+    def bind(self, invalidate: Callable[[], object] | None) -> None:
+        """Store the rebuild handle for :meth:`invalidate`.
+
+        Parameters
+        ----------
+        invalidate : callable or None
+            The owning component's ``invalidate``.
+
+        """
+        self._invalidate = invalidate
+
+    def invalidate(self) -> None:
+        """Queue a rebuild of the owning component; a no-op while unregistered."""
+        if self._invalidate is not None:
+            self._invalidate()
+
+    def default_state(self) -> dict[str, Any]:
+        """Return no settings.
+
+        Returns
+        -------
+        dict[str, Any]
+            An empty dict.
+
+        """
+        return {}
+
+    def get_state(self) -> dict[str, Any]:
+        """Return no settings.
+
+        Returns
+        -------
+        dict[str, Any]
+            An empty dict.
+
+        """
+        return {}
+
+    def set_state(self, state: Mapping[str, Any]) -> None:
+        """Ignore the state.
+
+        Parameters
+        ----------
+        state : Mapping[str, Any]
+            Unused.
+
+        """
+
+    def veto(self, settings: Mapping[str, Any]) -> str | None:  # noqa: ARG002
+        """Accept every setting.
+
+        Parameters
+        ----------
+        settings : Mapping[str, Any]
+            Unused.
+
+        Returns
+        -------
+        None
+            Always.
+
+        """
+        return None
 
 
-def _registry(plotter: BasePlotter) -> list[PassProvider]:
-    # The component holds the providers, so a provider that holds its plotter
-    # is an ordinary reference cycle rather than a pinned registry key.
-    return plotter.render_passes._providers  # noqa: SLF001
+def iter_entry_point_providers() -> Iterator[tuple[str, PassProvider | Exception]]:
+    """Instantiate every provider in :data:`ENTRY_POINT_GROUP`.
 
+    Yields
+    ------
+    tuple[str, PassProvider | Exception]
+        ``('name = value', provider)`` per entry point, with the exception in
+        place of the provider for one that failed to load or instantiate.
 
-def _register(plotter: BasePlotter, provider: PassProvider) -> None:
-    registry = _registry(plotter)
-    if any(existing is provider for existing in registry):
-        return
-    if provider.stage != 'base' and any(p.stage == provider.stage for p in registry):
-        msg = f'A {provider.stage!r} provider is already registered on this plotter.'
-        raise ValueError(msg)
-    registry.append(provider)
-    plotter.render_passes.invalidate()
+    """
+    for entry_point in entry_points(group=ENTRY_POINT_GROUP):
+        label = f'{entry_point.name} = {entry_point.value}'
+        try:
+            yield label, entry_point.load()()
+        except Exception as exc:  # noqa: BLE001  third-party import code raises anything
+            yield label, exc
 
 
 @overload
 def register_pass_provider[T](
-    plotter: BasePlotter, provider: None = None, *, stage: Stage | None = None
+    plotter: BasePlotter, provider: None = None
 ) -> Callable[[T], T]: ...  # numpydoc ignore=GL08
 @overload
+def register_pass_provider[T](plotter: BasePlotter, provider: T) -> T: ...  # numpydoc ignore=GL08
 def register_pass_provider[T](
-    plotter: BasePlotter, provider: T, *, stage: Stage | None = None
-) -> T: ...  # numpydoc ignore=GL08
-def register_pass_provider[T](
-    plotter: BasePlotter, provider: T | None = None, *, stage: Stage | None = None
+    plotter: BasePlotter, provider: T | None = None
 ) -> T | Callable[[T], T]:
-    """Register a provider on ``plotter``; idempotent per object, ordered.
+    """Register a provider on the active subplot by hand; idempotent per object.
 
-    Takes a provider object, a provider class (instantiated with no
-    arguments) or a bare ``build_pass`` function with ``stage`` given, and
-    works as a decorator when ``provider`` is omitted.
+    For a provider scoped to one plotter; an installed extension uses the
+    :data:`ENTRY_POINT_GROUP` entry points instead. State restored under the
+    provider's name before it was registered is applied to it now.
 
     Parameters
     ----------
     plotter : pyvista.plotting.plotter.BasePlotter
         Plotter whose active subplot composes the provider.
 
-    provider : PassProvider | type[PassProvider] | callable, optional
-        The provider, its class, or a ``build_pass(renderer, chain, delegate)``
-        function. Omit to get a decorator.
-
-    stage : {'base', 'translucent', 'post'}, optional
-        The stage, required for and only accepted with a function.
+    provider : PassProvider | type[PassProvider], optional
+        The provider, or its class (instantiated with no arguments). Omit to
+        get a class decorator.
 
     Returns
     -------
@@ -138,55 +364,44 @@ def register_pass_provider[T](
     Raises
     ------
     TypeError
-        If ``stage`` is missing for a function or given for anything else.
+        If ``provider`` does not implement :class:`PassProvider`.
 
     ValueError
-        If the stage already has a provider and admits only one.
+        If its name is taken, a stage is unknown, or a single-provider stage
+        already has a provider.
+
+    SettingsVetoedError
+        If it refuses the component's current settings.
 
     Examples
     --------
     >>> import pyvista as pv
-    >>> from pyvista_render_passes import providers
+    >>> from pyvista_render_passes import BasePassProvider, register_pass_provider
     >>> pl = pv.Plotter(off_screen=True)
-    >>> @providers.register_pass_provider(pl)
-    ... class Passthrough:
-    ...     stage = 'base'
+    >>> @register_pass_provider(pl)
+    ... class Passthrough(BasePassProvider):
+    ...     name = 'passthrough'
+    ...     stages = ('base',)
     ...
-    ...     def build_pass(self, renderer, chain, delegate):
+    ...     def build_pass(self, stage, renderer, chain, delegate):
     ...         return delegate
-    >>> @providers.register_pass_provider(pl, stage='post')
-    ... def nothing(renderer, chain, delegate):
-    ...     return None
-    >>> [p.stage for p in providers.pass_providers(pl)]
-    ['base', 'post']
+    >>> list(pl.render_passes.providers)
+    ['passthrough']
 
     """
     if provider is None:
 
         def decorator(target: T) -> T:
-            return register_pass_provider(plotter, target, stage=stage)
+            return register_pass_provider(plotter, target)
 
         return decorator
-    registered: PassProvider
-    if isinstance(provider, type | PassProvider):
-        if stage is not None:
-            msg = 'stage applies only to a build_pass function'
-            raise TypeError(msg)
-        registered = provider() if isinstance(provider, type) else provider
-    elif callable(provider):
-        if stage is None:
-            msg = 'stage is required when registering a build_pass function'
-            raise TypeError(msg)
-        registered = _FunctionProvider(stage, provider)
-    else:
-        msg = f'{provider!r} is not a provider, a provider class or a build_pass function'
-        raise TypeError(msg)
-    _register(plotter, registered)
+    instance = provider() if isinstance(provider, type) else provider
+    plotter.render_passes.add_provider(instance)
     return provider
 
 
 def unregister_pass_provider(plotter: BasePlotter, provider: object) -> None:
-    """Remove ``provider`` from ``plotter``; a no-op when absent.
+    """Remove a provider from the active subplot; a no-op when absent.
 
     Parameters
     ----------
@@ -194,59 +409,23 @@ def unregister_pass_provider(plotter: BasePlotter, provider: object) -> None:
         Plotter the provider was registered on.
 
     provider : object
-        What was passed to :func:`register_pass_provider`: the provider, its
-        class, or the ``build_pass`` function.
+        The provider, its class, or its name.
 
     Examples
     --------
     >>> import pyvista as pv
-    >>> from pyvista_render_passes import providers
-    >>> class Passthrough:
-    ...     stage = 'base'
-    ...
-    ...     def build_pass(self, renderer, chain, delegate):
-    ...         return delegate
+    >>> from pyvista_render_passes import (
+    ...     BasePassProvider,
+    ...     register_pass_provider,
+    ...     unregister_pass_provider,
+    ... )
+    >>> class Passthrough(BasePassProvider):
+    ...     name = 'passthrough'
     >>> pl = pv.Plotter(off_screen=True)
-    >>> provider = Passthrough()
-    >>> providers.register_pass_provider(pl, provider) is provider
-    True
-    >>> providers.unregister_pass_provider(pl, provider)
-    >>> providers.pass_providers(pl)
-    ()
+    >>> _ = register_pass_provider(pl, Passthrough)
+    >>> unregister_pass_provider(pl, 'passthrough')
+    >>> 'passthrough' in pl.render_passes.providers
+    False
 
     """
-    registry = _registry(plotter)
-    registry[:] = [p for p in registry if not _registered_as(p, provider)]
-    plotter.render_passes.invalidate()
-
-
-def _registered_as(registered: PassProvider, provider: object) -> bool:
-    if registered is provider:
-        return True
-    if isinstance(provider, type):
-        return type(registered) is provider
-    return isinstance(registered, _FunctionProvider) and registered.build_pass is provider
-
-
-def pass_providers(plotter: BasePlotter) -> tuple[PassProvider, ...]:
-    """Return the providers on ``plotter`` in registration order.
-
-    Parameters
-    ----------
-    plotter : pyvista.plotting.plotter.BasePlotter
-        Plotter to look up.
-
-    Returns
-    -------
-    tuple[PassProvider, ...]
-        Registered providers; empty when none.
-
-    Examples
-    --------
-    >>> import pyvista as pv
-    >>> from pyvista_render_passes import providers
-    >>> providers.pass_providers(pv.Plotter(off_screen=True))
-    ()
-
-    """
-    return tuple(_registry(plotter))
+    plotter.render_passes.remove_provider(provider)

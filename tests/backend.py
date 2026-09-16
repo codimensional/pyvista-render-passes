@@ -19,6 +19,7 @@ vtkRenderPass = _rendering.vtkRenderPass
 vtkCameraPass = _opengl.vtkCameraPass
 vtkDualDepthPeelingPass = _opengl.vtkDualDepthPeelingPass
 vtkEDLShading = _opengl.vtkEDLShading
+vtkFramebufferPass = _opengl.vtkFramebufferPass
 vtkGaussianBlurPass = _opengl.vtkGaussianBlurPass
 vtkOpenGLRenderPass = _opengl.vtkOpenGLRenderPass
 vtkRenderPassCollection = _opengl.vtkRenderPassCollection

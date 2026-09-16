@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import gc
 import logging
-import warnings
 
 import numpy as np
 import pytest
@@ -77,7 +76,7 @@ def test_entry_point_names_the_component_module():
 
 def test_default_state_matches_a_fresh_component():
     rpm = _make_plotter().render_passes
-    assert RenderPassComponent.default_state() == rpm.get_state()
+    assert rpm.default_state() == rpm.get_state()
     assert not any(rpm.get_state()[key] for key in ('depth_peeling', 'edl', 'ssao', 'dof'))
     assert rpm.get_state()['annotation_bypass'] is True
 
@@ -393,8 +392,8 @@ def test_default_ssaa_factor():
 
 
 def test_ssao_radius_defaults_to_derived():
-    assert RenderPassComponent.default_state()['ssao_radius'] is None
-    assert RenderPassComponent.default_state()['ssao_bias'] is None
+    assert _make_plotter().render_passes.default_state()['ssao_radius'] is None
+    assert _make_plotter().render_passes.default_state()['ssao_bias'] is None
 
 
 def test_derived_radius_tracks_the_scene_scale():
@@ -474,7 +473,7 @@ def test_enable_ssao_accepts_a_zero_bias():
 def test_set_state_drops_an_unusable_number_instead_of_raising(key, value, caplog):
     pl = pv.Plotter(off_screen=True)
     pl.add_mesh(pv.Cube())
-    state = RenderPassComponent.default_state() | {'ssao': True, key: value}
+    state = pl.render_passes.default_state() | {'ssao': True, key: value}
     with caplog.at_level(logging.WARNING):
         pl.render_passes.set_state(state)
     assert pl.render_passes.get_state()[key] is None
@@ -611,7 +610,7 @@ def test_disable_auto_apply_leaves_the_change_queued():
     assert pl.renderer.GetPass() is not None
 
 
-def test_auto_apply_swallows_errors_warns_once_and_rearms(monkeypatch):
+def test_auto_apply_swallows_errors_and_retries_on_the_next_render(monkeypatch):
     pl = _make_plotter()
     rpm = pl.render_passes.active
     calls = {'n': 0}
@@ -625,16 +624,13 @@ def test_auto_apply_swallows_errors_warns_once_and_rearms(monkeypatch):
     rpm.enable_anti_aliasing()
     with pytest.warns(RuntimeWarning, match='auto-apply failed'):
         pl.show(auto_close=False)
-    assert calls['n'] == 1
-    assert rpm._auto_apply_failed is True
+    shown = calls['n']
+    assert shown >= 1
 
-    with warnings.catch_warnings():
-        warnings.simplefilter('error')
-        pl.render()
-    assert calls['n'] == 1
-
-    rpm.enable_ssao()
-    assert rpm._auto_apply_failed is False
+    # No latch: a still-failing chain is retried, and reported, on every render.
+    with pytest.warns(RuntimeWarning, match='kaboom'):
+        pl.render_window.Render()
+    assert calls['n'] == shown + 1
     assert rpm._dirty is True
 
 
@@ -705,7 +701,7 @@ def test_deep_clean_resets_state_and_keeps_the_component_usable():
     pl.deep_clean()
     assert rpm.chain.GetTopPass() is None
     assert rpm.chain.GetSceneBasePass() is None
-    assert rpm.get_state() == RenderPassComponent.default_state()
+    assert rpm.get_state() == rpm.default_state()
     assert rpm._start_event_tag is not None
     assert rpm._dirty is False
 

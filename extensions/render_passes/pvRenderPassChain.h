@@ -15,13 +15,28 @@
  *          -> gaussian blur
  *          -> (caller's PostPass, optional)
  *          -> SSAA
+ *          -> (caller's OuterPass, optional)
  *          -> overlay
  * ```
  *
- * Three seams take a pass from another package: `TranslucentPass` replaces the
+ * Four seams take a pass from another package: `TranslucentPass` replaces the
  * translucent stage, the `base` argument of `Build` wraps the scene base below
- * every screen-space pass, and `PostPass` wraps the shaded frame below SSAA.
- * Whoever supplies such a pass releases it.
+ * every screen-space pass, `PostPass` wraps the shaded frame below SSAA, and
+ * `OuterPass` wraps the SSAA-resolved frame at window resolution. Whoever
+ * supplies such a pass releases it.
+ *
+ * @section outer-stage The outer stage sees the resolved frame
+ *
+ * A pass that sizes its framebuffer from the logical window (tone mapping is
+ * the usual one) covers only a fraction of an SSAA framebuffer, which is
+ * larger by the supersample factor on each axis. `OuterPass` runs outside SSAA,
+ * so its delegate has already resolved to the window and the two agree.
+ *
+ * An outer pass renders its delegate into a framebuffer of its own, so the depth
+ * SSAA resolves lands there rather than in the window. `Build` therefore builds
+ * SSAA under an outer pass, at 1x when anti-aliasing is off, and resolves that
+ * pass's depth into the window again after the outer pass, whatever the outer
+ * pass does with depth.
  *
  * @section overlay-last The overlay stage runs last, at the window
  *
@@ -272,6 +287,16 @@ public:
 
   ///@{
   /**
+   * A pass from another package over the SSAA-resolved frame, at window
+   * resolution, below the overlay stage. `Build` sets its delegate. Setting one
+   * makes the chain custom.
+   */
+  vtkSetSmartPointerMacro(OuterPass, vtkImageProcessingPass);
+  vtkGetSmartPointerMacro(OuterPass, vtkImageProcessingPass);
+  ///@}
+
+  ///@{
+  /**
    * Whether `Build` is going to receive a base pass. The decisions below
    * depend on it, and they are needed to build the scene base that pass wraps.
    */
@@ -404,6 +429,7 @@ private:
   double SsaaFactor = 2.2360679774997896; // sqrt(5), the pvSSAAVolumePass default
   vtkSmartPointer<vtkRenderPass> TranslucentPass;
   vtkSmartPointer<vtkImageProcessingPass> PostPass;
+  vtkSmartPointer<vtkImageProcessingPass> OuterPass;
   bool BasePassProvided = false;
 
   // Owned concretely, because a caller reaching for a pass wants its own knobs

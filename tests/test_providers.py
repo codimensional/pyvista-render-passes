@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import gc
+import importlib
 from importlib.metadata import EntryPoint
 import inspect
 import itertools
 import json
 import logging
 import re
+import sys
+from typing import get_args
 import warnings
 import weakref
 
@@ -106,12 +109,41 @@ _FAKE = ('fake_tone_mapping', 'tests.test_providers:FakeToneMapping')
 
 
 def _plotter(**kwargs) -> pv.Plotter:
-    pl = pv.Plotter(off_screen=True, window_size=(200, 150), **kwargs)
+    pl = pv.Plotter(window_size=(200, 150), **kwargs)
     pl.add_mesh(pv.Sphere(), opacity=0.5)
     return pl
 
 
 # -- discovery -----------------------------------------------------------------
+
+
+_FIXTURE_MODULE = """
+from pyvista_render_passes import BasePassProvider
+
+
+class FixtureProvider(BasePassProvider):
+    name = 'fixture_probe'
+"""
+
+
+def test_discovery_reads_the_real_entry_point_group(tmp_path, monkeypatch):
+    # The only test that does not monkeypatch providers.entry_points: a wrong
+    # ENTRY_POINT_GROUP passes every other one.
+    (tmp_path / 'prp_fixture_ext.py').write_text(_FIXTURE_MODULE)
+    dist_info = tmp_path / 'prp_fixture_ext-1.0.dist-info'
+    dist_info.mkdir()
+    (dist_info / 'METADATA').write_text(
+        'Metadata-Version: 2.1\nName: prp-fixture-ext\nVersion: 1.0\n'
+    )
+    (dist_info / 'entry_points.txt').write_text(
+        f'[{prp.ENTRY_POINT_GROUP}]\nfixture = prp_fixture_ext:FixtureProvider\n'
+    )
+    monkeypatch.syspath_prepend(str(tmp_path))
+    monkeypatch.delitem(sys.modules, 'prp_fixture_ext', raising=False)
+    importlib.invalidate_caches()
+
+    provider = _plotter().render_passes.providers['fixture_probe']
+    assert type(provider).__module__ == 'prp_fixture_ext'
 
 
 def test_an_installed_provider_registers_itself_per_subplot(monkeypatch):
@@ -183,16 +215,21 @@ def test_protocol_is_structural():
     assert not isinstance(object(), prp.PassProvider)
 
 
+def test_the_stage_tuple_and_the_stage_literal_agree():
+    assert get_args(providers_module.Stage) == providers_module.STAGES
+    assert set(providers_module.STAGES) > providers_module.SINGLE_PROVIDER_STAGES
+
+
 def test_register_is_idempotent_and_ordered():
     pl = _plotter()
     first, second = _Provider('base'), _Provider('base')
     prp.register_pass_provider(pl, second)
     prp.register_pass_provider(pl, first)
     prp.register_pass_provider(pl, second)
-    assert prp.pass_providers(pl) == (second, first)
+    assert tuple(pl.render_passes.providers.values()) == (second, first)
 
 
-@pytest.mark.parametrize('stage', ['translucent', 'post', 'outer'])
+@pytest.mark.parametrize('stage', sorted(providers_module.SINGLE_PROVIDER_STAGES))
 def test_single_pass_stages_refuse_a_second_provider(stage):
     pl = _plotter()
     prp.register_pass_provider(pl, _Provider(stage))
@@ -221,7 +258,7 @@ def test_unregister_by_object_class_or_name():
     for handle in (provider, _Provider, provider.name):
         prp.register_pass_provider(pl, provider)
         prp.unregister_pass_provider(pl, handle)
-        assert prp.pass_providers(pl) == ()
+        assert not pl.render_passes.providers
 
 
 def test_a_provider_holding_its_plotter_is_collected_with_it():
@@ -255,7 +292,7 @@ def test_class_decorator_registers_an_instance():
 def test_registry_is_per_plotter():
     a, b = _plotter(), _plotter()
     prp.register_pass_provider(a, _Provider('translucent'))
-    assert prp.pass_providers(b) == ()
+    assert not b.render_passes.providers
 
 
 # -- state ---------------------------------------------------------------------
@@ -527,7 +564,7 @@ def test_outer_pass_sees_the_window_while_post_sees_the_supersampled_frame():
 
 
 def _depth_scene(*, outer: bool, anti_aliasing: bool) -> tuple[np.ndarray, float]:
-    pl = pv.Plotter(off_screen=True, window_size=(300, 200))
+    pl = pv.Plotter(window_size=(300, 200))
     pl.add_mesh(pv.Sphere(center=(0.2, 0.1, 0.0)))
     pl.camera_position = _CAMERA
     if outer:
@@ -563,7 +600,7 @@ def test_point_labels_are_still_culled_under_an_outer_pass():
     cube = pv.Cube()
 
     def label_frames(*, outer: bool) -> list[int]:
-        pl = pv.Plotter(off_screen=True, window_size=(300, 300))
+        pl = pv.Plotter(window_size=(300, 300))
         # Red, so a blurred edge never reads as a grey label box.
         pl.add_mesh(cube, style='wireframe', color='red')
         pl.add_point_labels(
@@ -643,9 +680,20 @@ def test_post_provider_sits_below_ssaa_and_outer_above_it():
     assert rpm.chain.GetSsaaPass().GetDelegatePass() is rpm.chain.GetPostPass()
 
 
+@pytest.mark.parametrize('stage', providers_module.STAGES)
+def test_apply_asks_every_stage_for_a_pass_and_installs_it(stage):
+    pl = _plotter()
+    provider = _Provider(stage, vtkGaussianBlurPass)
+    prp.register_pass_provider(pl, provider)
+    rpm = pl.render_passes
+    rpm.apply()
+    assert len(provider.calls) == 1
+    assert rpm.is_active
+
+
 def test_providers_that_contribute_nothing_install_no_pass():
     pl = _plotter()
-    for stage in prp.providers.STAGES:
+    for stage in providers_module.STAGES:
         prp.register_pass_provider(pl, _Provider(stage))
     rpm = pl.render_passes
     rpm.apply()

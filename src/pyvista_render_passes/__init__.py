@@ -29,7 +29,6 @@ from .providers import (
     BasePassProvider,
     PassProvider,
     SettingsVetoedError,
-    pass_providers,
     register_pass_provider,
     unregister_pass_provider,
 )
@@ -59,7 +58,6 @@ __all__ = [
     'make_split_pass',
     'make_ssaa_pass',
     'make_ssao_pass',
-    'pass_providers',
     'prop_filter_tag_is_set',
     'pvPropKeyFilterPass',
     'pvRenderPassChain',

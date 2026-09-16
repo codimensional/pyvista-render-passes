@@ -128,7 +128,7 @@ pl.show()
   <img src="https://raw.githubusercontent.com/codimensional/pyvista-render-passes/main/docs/images/subplots.png" width="880" alt="Three linked subplots: plain, EDL, SSAO with SSAA">
 </p>
 
-Eye-dome lighting, blur and depth of field composite over the whole window from inside one subplot in VTK ([#18849](https://gitlab.kitware.com/vtk/vtk/-/issues/18849)), which blanks or whitens the others; the chain confines them to their own tile. `pl.render_passes.components` lists the subplots configured so far.
+Eye-dome lighting, blur and depth of field composite over the whole window from inside one subplot in VTK ([#18849](https://gitlab.kitware.com/vtk/vtk/-/issues/18849)), which blanks or whitens the others; the chain confines them to their own tile. `pl.render_passes.components` lists one component per subplot: the first access to `pl.render_passes` builds them all, configured or not.
 
 ## Passes without the component
 
@@ -144,7 +144,7 @@ enable_ssaa(pl, factor=2.0)  # SSAA on every renderer of a plotter
 
 ## Your own passes in the chain
 
-An installed package extends `plotter.render_passes` through providers. A provider is a named unit that contributes passes at any of four stages, owns settings saved and restored with the component's, and can refuse component settings it cannot work with. Expose it through the `pyvista_render_passes.providers` entry-point group and it composes into every subplot of any plotter whose `render_passes` component exists. PyVista creates that component on first access to `pl.render_passes`, so a plotter no code touches it on renders with VTK's default pipeline and without the extension.
+An installed package extends `plotter.render_passes` through providers. A provider is a named unit that contributes passes at any of four stages, owns settings saved and restored with the component's, and can refuse component settings it cannot work with. Expose it through the `pyvista_render_passes.providers` entry-point group and it composes into every subplot of any plotter whose `render_passes` component exists. PyVista creates that component on first access to `pl.render_passes`, so a plotter whose `render_passes` nothing touches renders with VTK's default pipeline, without the extension.
 
 ```toml
 [project.entry-points."pyvista_render_passes.providers"]
@@ -172,7 +172,9 @@ class ToneMapping(BasePassProvider):
         self.state |= state
 
     def build_pass(self, stage, renderer, chain, delegate):
-        return make_tone_mapping_pass(**self.state) if self.state['enabled'] else None
+        if not self.state['enabled']:
+            return None
+        return make_tone_mapping_pass(exposure=self.state['exposure'])
 
     def veto(self, settings):
         return 'reads back depth, so MSAA must stay off' if settings['msaa'] else None
@@ -191,6 +193,19 @@ class ToneMapping(BasePassProvider):
 - A pass that filters props on a channel of its own reserves one with `reserve_prop_filter_channel('my_package.overlay')`. `set_prop_filter_tag` refuses a channel nobody reserved; `'annotation'` is pre-reserved.
 - An `'outer'` pass gets SSAA underneath it (at 1x when anti-aliasing is off), whose depth is restored into the window after the outer pass, so depth reads and point-label culling behave as without it.
 - `register_pass_provider(pl, Provider)` adds a provider to one plotter's active subplot by hand; `unregister_pass_provider(pl, 'tone_mapping')` removes it. The component releases every pass a provider builds.
+
+### Breaking change: prop-filter channels are reserved, not ad hoc
+
+`set_prop_filter_tag(prop, channel=N)` now raises `ValueError` for any `N` that nobody reserved. In 0.1.x every channel in `[0, 30]` was accepted, so `set_prop_filter_tag(prop, channel=1)` worked and now raises. `CHANNEL_ANNOTATION` (channel 0) stays pre-reserved and keeps working, as does the default call with no `channel`. Take a channel first and tag on what it returns:
+
+```python
+from pyvista_render_passes import reserve_prop_filter_channel, set_prop_filter_tag
+
+channel = reserve_prop_filter_channel('my_package.overlay')  # idempotent per name
+set_prop_filter_tag(prop, channel=channel)
+```
+
+The registry is the point: two packages that each picked a bit by hand would split each other's props. Reading is unrestricted, so `has_prop_filter_tag`, `prop_filter_tag_is_set`, `clear_prop_filter_tag`, `make_prop_filter_pass` and `make_split_pass` take any channel in range.
 
 ## Why a chain
 

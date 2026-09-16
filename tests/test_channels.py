@@ -11,6 +11,8 @@ import pyvista_render_passes as prp
 from pyvista_render_passes import passes
 from tests.backend import vtkProp
 
+MAX_CHANNEL = prp.pvPropKeyFilterPass.ChannelMaximum
+
 
 @pytest.fixture(autouse=True)
 def _fresh_registry(monkeypatch):
@@ -36,15 +38,15 @@ def test_conflicting_reservations_raise():
     ):
         prp.reserve_prop_filter_channel('pkg.overlay', channel=6)
     with pytest.raises(ValueError, match='channel must be in'):
-        prp.reserve_prop_filter_channel('pkg.far', channel=passes._MAX_CHANNEL + 1)
+        prp.reserve_prop_filter_channel('pkg.far', channel=MAX_CHANNEL + 1)
     with pytest.raises(ValueError, match='non-empty string'):
         prp.reserve_prop_filter_channel('')
 
 
 def test_exhaustion_raises_and_never_hands_out_the_annotation_channel():
-    handed_out = [prp.reserve_prop_filter_channel(f'pkg.{i}') for i in range(passes._MAX_CHANNEL)]
+    handed_out = [prp.reserve_prop_filter_channel(f'pkg.{i}') for i in range(MAX_CHANNEL)]
     assert prp.CHANNEL_ANNOTATION not in handed_out
-    assert sorted(handed_out) == list(range(1, passes._MAX_CHANNEL + 1))
+    assert sorted(handed_out) == list(range(1, MAX_CHANNEL + 1))
     with pytest.raises(RuntimeError, match='prop-filter channels are reserved'):
         prp.reserve_prop_filter_channel('pkg.one_too_many')
 
@@ -61,7 +63,7 @@ def test_tagging_on_an_unreserved_channel_raises():
 
 def test_a_reserved_channel_partitions_independently_of_annotations():
     channel = prp.reserve_prop_filter_channel('pkg.overlay')
-    prop = pv.Plotter(off_screen=True).add_mesh(pv.Sphere())
+    prop = pv.Plotter().add_mesh(pv.Sphere())
     assert isinstance(prop, vtkProp)
     prp.set_prop_filter_tag(prop, channel=channel)
     assert prp.has_prop_filter_tag(prop, channel=channel)

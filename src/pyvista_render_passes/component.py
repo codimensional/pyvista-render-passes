@@ -17,7 +17,7 @@ import logging
 import math
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Self
+from typing import Any, Self, cast
 import warnings
 
 import pyvista as pv
@@ -169,14 +169,6 @@ def _warn_and_log(message: str) -> None:
     warnings.warn(message, RuntimeWarning, skip_file_prefixes=_INTERNAL_PREFIXES)
 
 
-# The chain seam each single-provider stage fills.
-_SINGLE_PASS_SEAMS: dict[Stage, str] = {
-    'translucent': 'SetTranslucentPass',
-    'post': 'SetPostPass',
-    'outer': 'SetOuterPass',
-}
-
-
 def _vetoable[F: Callable[..., Any]](method: F) -> F:
     # Commits the setter only if every provider accepts the result; otherwise,
     # and on any other exception, restores the snapshot and re-raises.
@@ -205,8 +197,9 @@ def _vetoable[F: Callable[..., Any]](method: F) -> F:
             self._transaction_depth -= 1
         return result
 
+    # The marker is how the test that no setter escapes a transaction finds them.
     wrapper.__vetoable__ = True  # type: ignore[attr-defined]
-    return wrapper  # type: ignore[return-value]
+    return cast('F', wrapper)
 
 
 def _wrap_setters(cls: type) -> None:
@@ -359,8 +352,9 @@ class RenderPassComponent:
 
     def _clear_seams(self) -> None:
         # The chain holds provider passes in its seams; drop them with the chain.
-        for setter in _SINGLE_PASS_SEAMS.values():
-            getattr(self._chain, setter)(None)
+        self._chain.SetTranslucentPass(None)
+        self._chain.SetPostPass(None)
+        self._chain.SetOuterPass(None)
         self._chain.SetBasePassProvided(False)
 
     def _release_provided(self, window: Any) -> None:  # noqa: ANN401
@@ -1081,6 +1075,7 @@ class RenderPassComponent:
             If a provider refuses the current settings, which happens when a
             provider was changed directly into a state that conflicts with
             them. Nothing is rebuilt.
+
         """
         self._check_vetoes()
         renderer = self._renderer
@@ -1097,8 +1092,9 @@ class RenderPassComponent:
         chain = self._chain
         self._push_settings(chain)
         # The single-pass seams are set before the build decisions are read.
-        for stage, setter in _SINGLE_PASS_SEAMS.items():
-            getattr(chain, setter)(self._provided_pass(stage))
+        chain.SetTranslucentPass(self._provided_pass('translucent'))
+        chain.SetPostPass(self._provided_pass('post'))
+        chain.SetOuterPass(self._provided_pass('outer'))
         base = self._provided_base()
         has_custom_passes = chain.GetRequiresCustomPassChain()
 
@@ -1385,7 +1381,9 @@ class RenderPassComponent:
                 if (provider := self._providers.get(name)) is None:
                     self._pending_provider_states[name] = copy.deepcopy(provider_state)
                 else:
-                    provider.set_state(provider_state)
+                    # Deep-copied like the pending branch: a provider that keeps
+                    # the reference must not alias the caller's dict.
+                    provider.set_state(copy.deepcopy(provider_state))
             self.invalidate()
         return self
 
@@ -1436,9 +1434,10 @@ class RenderPasses:
     """``plotter.render_passes``: the component of whichever subplot is active.
 
     Every attribute lookup forwards to the :class:`RenderPassComponent` of
-    ``plotter.renderer``, created on first use, so ``pl.subplot(0, 1)``
-    followed by ``pl.render_passes.enable_edl()`` configures that subplot and
-    no other. Each subplot keeps its own settings and chain.
+    ``plotter.renderer``. Every subplot's component is built with this object,
+    so ``pl.subplot(0, 1)`` followed by ``pl.render_passes.enable_edl()``
+    configures that subplot and no other. Each subplot keeps its own settings
+    and chain.
 
     Parameters
     ----------
@@ -1465,7 +1464,6 @@ class RenderPasses:
         # installed provider composes into subplots nobody configured.
         for renderer in plotter.renderers:
             self._components[renderer] = RenderPassComponent(plotter, renderer)
-        _ = self.active
 
     @property
     def active(self) -> RenderPassComponent:
@@ -1478,7 +1476,7 @@ class RenderPasses:
 
     @property
     def components(self) -> tuple[RenderPassComponent, ...]:
-        """The components created so far, in creation order."""
+        """One component per subplot, in creation order, configured or not."""
         return tuple(self._components.values())
 
     def __getattr__(self, name: str) -> Any:  # noqa: ANN401

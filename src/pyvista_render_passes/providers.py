@@ -29,7 +29,6 @@ __all__ = [
     'SettingsVetoedError',
     'Stage',
     'iter_entry_point_providers',
-    'pass_providers',
     'register_pass_provider',
     'unregister_pass_provider',
 ]
@@ -217,6 +216,7 @@ class BasePassProvider:
 
     name: ClassVar[str]
     stages: tuple[Stage, ...] = ()
+    _invalidate: Callable[[], object] | None = None
 
     def build_pass(
         self,
@@ -262,8 +262,8 @@ class BasePassProvider:
 
     def invalidate(self) -> None:
         """Queue a rebuild of the owning component; a no-op while unregistered."""
-        if (handle := getattr(self, '_invalidate', None)) is not None:
-            handle()
+        if self._invalidate is not None:
+            self._invalidate()
 
     def default_state(self) -> dict[str, Any]:
         """Return no settings.
@@ -317,17 +317,11 @@ class BasePassProvider:
 def iter_entry_point_providers() -> Iterator[tuple[str, PassProvider | Exception]]:
     """Instantiate every provider in :data:`ENTRY_POINT_GROUP`.
 
-    Returns
-    -------
-    Iterator[tuple[str, PassProvider | Exception]]
+    Yields
+    ------
+    tuple[str, PassProvider | Exception]
         ``('name = value', provider)`` per entry point, with the exception in
         place of the provider for one that failed to load or instantiate.
-
-    Examples
-    --------
-    >>> from pyvista_render_passes.providers import iter_entry_point_providers
-    >>> all(isinstance(label, str) for label, _ in iter_entry_point_providers())
-    True
 
     """
     for entry_point in entry_points(group=ENTRY_POINT_GROUP):
@@ -435,27 +429,3 @@ def unregister_pass_provider(plotter: BasePlotter, provider: object) -> None:
 
     """
     plotter.render_passes.remove_provider(provider)
-
-
-def pass_providers(plotter: BasePlotter) -> tuple[PassProvider, ...]:
-    """Return the active subplot's providers in registration order.
-
-    Parameters
-    ----------
-    plotter : pyvista.plotting.plotter.BasePlotter
-        Plotter to look up.
-
-    Returns
-    -------
-    tuple[PassProvider, ...]
-        Registered providers, entry-point ones first.
-
-    Examples
-    --------
-    >>> import pyvista as pv
-    >>> from pyvista_render_passes import pass_providers
-    >>> pass_providers(pv.Plotter(off_screen=True))
-    ()
-
-    """
-    return tuple(plotter.render_passes.providers.values())

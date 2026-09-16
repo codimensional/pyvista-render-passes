@@ -27,7 +27,8 @@ jobs:
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           python-version: "3.12"
-      - run: uv sync --no-editable --extra dev --extra cvista --extra vtk
+      # No VTK wheel SDK is fetched here, so the build carries cvista only.
+      - run: uv sync --no-editable --extra cvista --group dev
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync mypy
@@ -53,8 +54,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - uses: pyvista/setup-headless-display-action@c103a2ff45650d38cb71684b5dc6cdfeb9442c79 # v5.1.0
       - run: uv venv
-      - run: uv run --no-project --no-sync python scripts/fetch_vtk_sdk.py
-      - run: uv sync --no-editable --extra dev --extra cvista --extra vtk
+      # --no-sync, not --no-project: the SDK is fetched per interpreter, so it
+      # has to be the one .venv holds.
+      - run: uv run --no-sync python scripts/fetch_vtk_sdk.py
+      - run: uv sync --no-editable --extra cvista --extra vtk --group dev --group sdk
       - run: uv run --no-sync pytest --cov --cov-report=xml
       - if: matrix.python-version == '3.12' && matrix.backend == 'vtk'
         uses: codecov/codecov-action@fb8b3582c8e4def4969c97caa2f19720cb33a72f # v7.0.0
@@ -83,4 +86,47 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheel-${{ matrix.only }}
-          path: wheelhouse/*.whl
+          path: wheelhouse/pyvista_render_passes-*.whl
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdk-wheel-${{ matrix.only }}
+          path: wheelhouse/pyvista_render_passes_sdk-*.whl
+
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          python-version: "3.12"
+      - run: uv venv
+      - run: uv run --no-sync python scripts/fetch_vtk_sdk.py
+      - run: >-
+          cmake -S extensions -B build/static -DPVRP_STATIC=ON -DPVRP_BACKEND=vtk
+          -DVTK_DIR="$(ls -d build/vtk-sdk/vtk-wheel-sdk-*/vtk-*.data/headers/cmake)"
+          -DCMAKE_INSTALL_PREFIX="$PWD/build/static-prefix"
+      - run: cmake --build build/static --parallel && cmake --install build/static
+      - run: |
+          test -f build/static-prefix/lib/libPyVistaRenderPasses.a
+          test -f build/static-prefix/lib/cmake/PyVistaRenderPasses/PyVistaRenderPasses-targets.cmake
+          test -f build/static-prefix/lib/cmake/PyVistaRenderPasses/PyVistaRenderPasses-vtk-module-properties.cmake
+
+  wasm:
+    runs-on: ubuntu-latest
+    container: kitware/vtk-wasm-sdk@sha256:3981d8648854684eb7e8cdc00541c4c321f26d8c6e0d85ceb7ebce31bd91151f
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: >-
+          emcmake cmake -S extensions -B build/wasm -DPVRP_STATIC=ON -DPVRP_BACKEND=vtk
+          -DVTK_DIR=/VTK-install/Release/wasm32/lib/cmake/vtk
+          -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$PWD/build/wasm-prefix"
+      - run: cmake --build build/wasm --parallel
+      - run: cmake --install build/wasm
+      - run: |
+          test -f build/wasm-prefix/lib/libPyVistaRenderPasses.a
+          test -f build/wasm-prefix/lib/cmake/PyVistaRenderPasses/PyVistaRenderPasses-targets.cmake
+          test -f build/wasm-prefix/lib/cmake/PyVistaRenderPasses/PyVistaRenderPasses-vtk-module-properties.cmake

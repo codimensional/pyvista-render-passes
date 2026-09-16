@@ -6,13 +6,13 @@ build-backend = "scikit_build_core.build"
 # there and the Windows wheel carries the stock build only.
 requires = [
   "cvista-sdk==9.7.0.5.*; sys_platform != 'win32'",
-  "scikit-build-core>=0.10",
+  "scikit-build-core>=1.0",
   "setuptools_scm>=8",
 ]
 
 [project]
 name = "pyvista-render-passes"
-dynamic = ["version"]
+dynamic = ["optional-dependencies", "version"]
 description = "Render pass chain for PyVista: volume-safe SSAA, SSAO, EDL, depth peeling, shadows, and a plotter.render_passes component."
 readme = "README.md"
 license = "MIT AND BSD-3-Clause"
@@ -33,13 +33,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 keywords = ["pyvista", "render-pass", "ssaa", "ssao", "edl", "visualization"]
-# Each extra pins the distribution its build was compiled against (docs/design.md).
 dependencies = ["numpy>=1.24", "pyvista>=0.49"]
-
-[project.optional-dependencies]
-cvista = ["cvista-rendering==9.7.0.5.*"]
-vtk = ["vtk>=9.7,<9.8"]
-dev = ["mypy>=1.10", "pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.15"]
 
 [project.entry-points."pyvista.plotter_components"]
 render_passes = "pyvista_render_passes.component"
@@ -49,11 +43,16 @@ Homepage = "https://github.com/codimensional/pyvista-render-passes"
 Issues = "https://github.com/codimensional/pyvista-render-passes/issues"
 Repository = "https://github.com/codimensional/pyvista-render-passes"
 
+# `sdk` is what tests/test_sdk_consumer.py builds against, so it must equal the
+# build requirement above (tests/test_build_variants.py); a lint install skips it.
+[dependency-groups]
+dev = ["mypy>=1.10", "pytest>=8.0", "pytest-cov>=5.0", "ruff>=0.15"]
+sdk = ["cvista-sdk==9.7.0.5.*; sys_platform != 'win32'"]
+
 [tool.scikit-build]
 build-dir = "build/{wheel_tag}"
 cmake.build-type = "Release"
-minimum-version = "0.10"
-metadata.version.provider = "scikit_build_core.metadata.setuptools_scm"
+minimum-version = "1.0"
 wheel.packages = ["src/pyvista_render_passes"]
 wheel.exclude = [
   "**/*.cmake",
@@ -63,6 +62,14 @@ wheel.exclude = [
   "include/**",
   "share/**",
 ]
+
+# One runtime pin per built variant, derived from the SDKs the build used; see
+# docs/design.md "Building against another SDK".
+[[tool.dynamic-metadata]]
+provider = { path = "scripts", module = "build_variants" }
+
+[[tool.dynamic-metadata]]
+provider = "scikit_build_core.metadata.setuptools_scm"
 
 [tool.scikit-build.sdist]
 include = [
@@ -91,15 +98,16 @@ test-command = "python {project}/scripts/smoke.py"
 [tool.cibuildwheel.linux]
 manylinux-x86_64-image = "manylinux_2_28"
 manylinux-aarch64-image = "manylinux_2_28"
-repair-wheel-command = "auditwheel repair --exclude 'libvtk*' --exclude 'libviskores*' --exclude 'libgomp*' -w {dest_dir} {wheel}"
+repair-wheel-command = "auditwheel repair --exclude 'libvtk*' --exclude 'libviskores*' --exclude 'libgomp*' -w {dest_dir} {wheel} && python {project}/scripts/build_sdk.py --built {wheel} --repaired {dest_dir} --out /output"
 
 # Kitware ships no arm64 wheel SDK, so macOS carries the cvista build only, as
 # one abi3 wheel.
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
 build = "cp312-*"
+test-extras = ["cvista"]
 environment = { SKBUILD_WHEEL_PY_API = "cp312" }
-repair-wheel-command = "delocate-wheel --exclude 'libvtk' --ignore-missing-dependencies --require-archs {delocate_archs} -w {dest_dir} -v {wheel}"
+repair-wheel-command = "delocate-wheel --exclude 'libvtk' --ignore-missing-dependencies --require-archs {delocate_archs} -w {dest_dir} -v {wheel} && python {project}/scripts/build_sdk.py --built {wheel} --repaired {dest_dir} --out {project}/wheelhouse"
 # abi3audit reads VTK's own PyVTK* wrapping symbols as stable-ABI violations.
 audit-command = ""
 
@@ -108,16 +116,20 @@ audit-command = ""
 [tool.cibuildwheel.windows]
 archs = ["AMD64"]
 test-extras = ["vtk"]
-repair-wheel-command = ""
+repair-wheel-command = 'python -c "import shutil, sys; shutil.copy(sys.argv[1], sys.argv[2])" {wheel} {dest_dir} && python {project}/scripts/build_sdk.py --built {wheel} --repaired {dest_dir} --out {project}/wheelhouse'
 
 # uv only rebuilds a path install when a cache key changes; the default key is
 # pyproject.toml alone, which misses every source edit.
 [tool.uv]
 cache-keys = [
   { file = "CMakeLists.txt" },
+  { file = "build/vtk-sdk/*/vtk-*.data/headers/cmake/vtk-config-version.cmake" },
   { file = "extensions/**/*" },
   { file = "pyproject.toml" },
+  { file = "scripts/build_variants.py" },
   { file = "src/**/*.py" },
+  { env = "PVRP_BACKEND" },
+  { env = "PVRP_VTK_DIR" },
 ]
 
 [tool.coverage.run]

@@ -1,4 +1,4 @@
-vtk_module_add_module(PyVistaRenderPasses
+vtk_module_add_module(PyVistaRenderPasses::RenderPasses
   SOURCES pvPropKeyFilterPass.cxx
           pvRenderPassChain.cxx
           pvSSAAVolumePass.cxx

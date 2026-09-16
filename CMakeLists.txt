@@ -11,49 +11,31 @@ if(APPLE AND NOT CMAKE_OSX_DEPLOYMENT_TARGET)
 endif()
 
 find_package(Python REQUIRED COMPONENTS Interpreter)
-set(_py_tag "cp${Python_VERSION_MAJOR}${Python_VERSION_MINOR}")
 
-# cvista: the `cvista-sdk` wheel in [build-system] requires ships the CMake config.
-set(PVRP_CVISTA_SDK "" CACHE PATH "Directory holding cvista-sdk's vtk-config.cmake")
-if(NOT PVRP_CVISTA_SDK)
-  execute_process(
-    COMMAND "${Python_EXECUTABLE}" -c
-      "import cvista_sdk, pathlib; print(pathlib.Path(cvista_sdk.__file__).parent / 'cmake')"
-    OUTPUT_VARIABLE PVRP_CVISTA_SDK
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET)
+# scripts/build_variants.py decides what to build (every SDK found, or the one
+# PVRP_BACKEND + PVRP_VTK_DIR select) and writes the wheel's runtime pins from
+# the same SDKs, keyed on the interpreter scikit-build-core hands this build.
+execute_process(
+  COMMAND "${Python_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/scripts/build_variants.py"
+  OUTPUT_VARIABLE _variant_lines
+  ERROR_VARIABLE _variant_error
+  RESULT_VARIABLE _variant_result
+  OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(_variant_result)
+  message(FATAL_ERROR "scripts/build_variants.py failed: ${_variant_error}")
 endif()
+string(REGEX REPLACE "\r?\n" ";" _variant_lines "${_variant_lines}")
 
-# Stock VTK: Kitware's wheel SDK, unpacked by scripts/fetch_vtk_sdk.py.
-set(PVRP_VTK_SDK "" CACHE PATH "Root of an unpacked vtk-wheel-sdk-* tarball")
-if(NOT PVRP_VTK_SDK)
-  file(GLOB _sdk_roots "${CMAKE_CURRENT_SOURCE_DIR}/build/vtk-sdk/vtk-wheel-sdk-*-${_py_tag}-*")
-  if(_sdk_roots)
-    list(GET _sdk_roots 0 PVRP_VTK_SDK)
-  endif()
-endif()
-set(_vtk_config "")
-if(PVRP_VTK_SDK)
-  file(GLOB _vtk_config "${PVRP_VTK_SDK}/vtk-*.data/headers/cmake")
+set(_version "${SKBUILD_PROJECT_VERSION}")
+if(NOT _version)
+  set(_version "0.0.0")
 endif()
 
-set(_variants "")
-if(PVRP_CVISTA_SDK AND EXISTS "${PVRP_CVISTA_SDK}/vtk-config.cmake")
-  list(APPEND _variants cvista)
-  set(_vtk_dir_cvista "${PVRP_CVISTA_SDK}")
-  set(_runtime_cvista cvista)
-endif()
-if(_vtk_config AND EXISTS "${_vtk_config}/vtk-config.cmake")
-  list(APPEND _variants vtk)
-  set(_vtk_dir_vtk "${_vtk_config}")
-  set(_runtime_vtk vtkmodules)
-endif()
-if(NOT _variants)
-  message(FATAL_ERROR "No VTK to build against: neither cvista-sdk nor a vtk wheel SDK was found")
-endif()
-message(STATUS "Building variants: ${_variants}")
-
-foreach(_variant IN LISTS _variants)
+foreach(_line IN LISTS _variant_lines)
+  string(REPLACE "|" ";" _fields "${_line}")
+  list(GET _fields 0 _variant)
+  list(GET _fields 1 _vtk_dir)
+  message(STATUS "Building variant ${_variant} against ${_vtk_dir}")
   set(_staging "${CMAKE_CURRENT_BINARY_DIR}/staging-${_variant}")
   ExternalProject_Add(variant_${_variant}
     SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extensions"
@@ -61,13 +43,15 @@ foreach(_variant IN LISTS _variants)
     INSTALL_DIR "${_staging}"
     BUILD_ALWAYS ON
     CMAKE_ARGS
-      "-DVTK_DIR=${_vtk_dir_${_variant}}"
+      "-DVTK_DIR=${_vtk_dir}"
       "-DPVRP_BACKEND=${_variant}"
-      "-DPVRP_RUNTIME_DIR=${_runtime_${_variant}}"
+      "-DPVRP_VERSION=${_version}"
       "-DPython3_EXECUTABLE=${Python_EXECUTABLE}"
       "-DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}"
       "-DCMAKE_INSTALL_PREFIX=${_staging}"
       "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
       "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
-  install(DIRECTORY "${_staging}/" DESTINATION "." USE_SOURCE_PERMISSIONS)
+  # The runtime wheel takes the package directory only.
+  install(DIRECTORY "${_staging}/pyvista_render_passes/" DESTINATION "pyvista_render_passes"
+    USE_SOURCE_PERMISSIONS)
 endforeach()

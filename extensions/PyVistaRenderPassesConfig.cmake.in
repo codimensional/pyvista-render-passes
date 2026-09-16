@@ -1,0 +1,93 @@
+# CMake package for PyVistaRenderPasses, built against @PVRP_BACKEND@ generation
+# @PVRP_GENERATION@. Point VTK_DIR at an SDK of that backend and generation.
+cmake_policy(PUSH)
+cmake_policy(VERSION 3.15)
+
+set(PyVistaRenderPasses_BACKEND "@PVRP_BACKEND@")
+set(PyVistaRenderPasses_GENERATION "@PVRP_GENERATION@")
+set(PyVistaRenderPasses_GLIBCXX_USE_CXX11_ABI "@PVRP_CXX11_ABI@")
+set(PyVistaRenderPasses_STATIC "@PVRP_STATIC@")
+
+include(CMakeFindDependencyMacro)
+find_dependency(VTK COMPONENTS CommonCore RenderingCore RenderingOpenGL2)
+
+# The library inlines VTK's headers and binds to its class layouts, so another
+# backend or generation links and then misbehaves. Refuse it here instead.
+include("${CMAKE_CURRENT_LIST_DIR}/PyVistaRenderPassesVTKIdentity.cmake")
+_pyvista_render_passes_vtk_identity(_pvrp_backend _pvrp_generation)
+set(_pvrp_refusal "")
+if(NOT _pvrp_backend STREQUAL PyVistaRenderPasses_BACKEND)
+  set(_pvrp_refusal
+    "built against a ${PyVistaRenderPasses_BACKEND} SDK, but VTK_DIR (${VTK_DIR}) is a ${_pvrp_backend} SDK")
+elseif(NOT _pvrp_generation STREQUAL PyVistaRenderPasses_GENERATION)
+  set(_pvrp_refusal
+    "built against ${PyVistaRenderPasses_BACKEND} generation ${PyVistaRenderPasses_GENERATION}, but VTK_DIR (${VTK_DIR}) is generation '${_pvrp_generation}'")
+elseif(PyVistaRenderPasses_GLIBCXX_USE_CXX11_ABI STREQUAL "0")
+  # Exported as a compile definition; a VTK built with the other ABI would
+  # leave every std::string-returning call unresolved.
+  get_property(_pvrp_languages GLOBAL PROPERTY ENABLED_LANGUAGES)
+  if("CXX" IN_LIST _pvrp_languages)
+    set(_pvrp_probe "${CMAKE_BINARY_DIR}/CMakeFiles/PyVistaRenderPassesAbiProbe")
+    file(WRITE "${_pvrp_probe}/probe.cxx"
+      "#include <vtkObject.h>\n#include <string>\n"
+      "int main() { vtkObject* o = vtkObject::New(); std::string s = o->vtkObject::GetObjectDescription(); o->Delete(); return int(s.size()); }\n")
+    unset(_pvrp_old_abi_links CACHE)
+    try_compile(_pvrp_old_abi_links "${_pvrp_probe}/build"
+      SOURCES "${_pvrp_probe}/probe.cxx"
+      COMPILE_DEFINITIONS -D_GLIBCXX_USE_CXX11_ABI=0
+      LINK_LIBRARIES VTK::CommonCore
+      CXX_STANDARD 17)
+    if(NOT _pvrp_old_abi_links)
+      set(_pvrp_refusal
+        "built with the pre-C++11 libstdc++ ABI, but the VTK at VTK_DIR (${VTK_DIR}) does not link with it")
+    endif()
+  endif()
+endif()
+if(_pvrp_refusal)
+  set(PyVistaRenderPasses_FOUND FALSE)
+  set(PyVistaRenderPasses_NOT_FOUND_MESSAGE "${_pvrp_refusal}")
+  cmake_policy(POP)
+  return()
+endif()
+
+# Targets first: both properties files set properties on the imported target. The
+# module properties name the wrapping hierarchy file a dependent module needs to
+# wrap methods taking our classes; the Python ones name the package to import.
+include("${CMAKE_CURRENT_LIST_DIR}/PyVistaRenderPasses-targets.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/PyVistaRenderPasses-vtk-module-properties.cmake")
+if(EXISTS "${CMAKE_CURRENT_LIST_DIR}/pyvista_render_passes._@PVRP_BACKEND@-vtk-python-module-properties.cmake")
+  include("${CMAKE_CURRENT_LIST_DIR}/pyvista_render_passes._@PVRP_BACKEND@-vtk-python-module-properties.cmake")
+endif()
+
+#[==[
+pyvista_render_passes_runtime_rpath(<out_var> DESTINATION <dir>)
+
+Sets <out_var> to the install rpath for a binary installed into <dir>, a
+directory relative to site-packages, so that it loads this package's library
+from the pyvista-render-passes wheel and VTK from the @PVRP_RUNTIME_DIR@ wheel,
+relative to itself. Empty on Windows, which has no rpath: import
+pyvista_render_passes first there, which adds the DLL directory.
+#]==]
+function(pyvista_render_passes_runtime_rpath out_var)
+  cmake_parse_arguments(PARSE_ARGV 1 _pvrp "" "DESTINATION" "")
+  if(NOT _pvrp_DESTINATION OR IS_ABSOLUTE "${_pvrp_DESTINATION}")
+    message(FATAL_ERROR
+      "pyvista_render_passes_runtime_rpath: DESTINATION must be a directory relative to site-packages")
+  endif()
+  if(WIN32)
+    set("${out_var}" "" PARENT_SCOPE)
+    return()
+  elseif(APPLE)
+    set(_origin "@loader_path")
+  else()
+    set(_origin "$ORIGIN")
+  endif()
+  set(_rpath "")
+  foreach(_dir IN ITEMS "pyvista_render_passes/_@PVRP_BACKEND@" "@PVRP_RUNTIME_DIR@")
+    file(RELATIVE_PATH _relative "/site-packages/${_pvrp_DESTINATION}" "/site-packages/${_dir}")
+    list(APPEND _rpath "${_origin}/${_relative}")
+  endforeach()
+  set("${out_var}" "${_rpath}" PARENT_SCOPE)
+endfunction()
+
+cmake_policy(POP)

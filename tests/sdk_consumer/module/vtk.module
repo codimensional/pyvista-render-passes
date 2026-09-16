@@ -1,0 +1,9 @@
+NAME
+  SdkConsumer
+LIBRARY_NAME
+  SdkConsumer
+DEPENDS
+  VTK::CommonCore
+  PyVistaRenderPasses::RenderPasses
+DESCRIPTION
+  Test consumer of the PyVistaRenderPasses C++ SDK.

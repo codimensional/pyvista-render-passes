@@ -24,7 +24,13 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wheels-${{ matrix.os }}
-          path: wheelhouse/*.whl
+          path: wheelhouse/pyvista_render_passes-*.whl
+      # A build artifact only: publish below uploads the wheels-* artifacts, and
+      # this repo has no publisher for a second project name.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdk-wheels-${{ matrix.os }}
+          path: wheelhouse/pyvista_render_passes_sdk-*.whl
 
   sdist:
     runs-on: ubuntu-latest

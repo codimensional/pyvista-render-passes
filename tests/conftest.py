@@ -4,14 +4,32 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 import contextlib
+import importlib.util
 import os
+from pathlib import Path
 import sys
 import tempfile
+from types import ModuleType
 
 import pytest
 import pyvista as pv
 
 pv.OFF_SCREEN = True
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+def load_script(name: str) -> ModuleType:
+    """Import ``scripts/<name>.py``, which belongs to no importable package."""
+    if (loaded := sys.modules.get(name)) is not None:
+        return loaded
+    spec = importlib.util.spec_from_file_location(name, REPO / 'scripts' / f'{name}.py')
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module  # dataclasses resolve their module by name
+    spec.loader.exec_module(module)
+    return module
 
 
 @pytest.fixture(autouse=True)

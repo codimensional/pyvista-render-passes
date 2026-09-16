@@ -211,3 +211,25 @@ just lint         # pre-commit
 A C++17 compiler and CMake are required. `cvista-sdk` supplies the headers and CMake config for the cvista build; `scripts/fetch_vtk_sdk.py` downloads Kitware's wheel SDK for the stock build into `build/vtk-sdk/`. Without that SDK the package still builds, carrying the cvista variant only.
 
 The passes themselves are backend-neutral C++; `pyvista_render_passes.backend_module('vtkRenderingOpenGL2')` returns the active distribution's module for code that needs VTK classes without choosing one.
+
+## Building against the C++ SDK
+
+A VTK module of your own can link the passes and take them as arguments, from C++ and from Python. Every wheel build also produces a `pyvista-render-passes-sdk` wheel (headers, the `PyVistaRenderPasses` CMake package and the wrapping hierarchy file, per variant), which CI keeps as a build artifact; `just sdk` packages one locally.
+
+```cmake
+# -DVTK_DIR=<same backend and generation> -DPyVistaRenderPasses_DIR="$(python -m pyvista_render_passes_sdk --cmake-dir --backend vtk)"
+find_package(VTK REQUIRED COMPONENTS CommonCore WrappingPythonCore)
+find_package(PyVistaRenderPasses REQUIRED)
+pyvista_render_passes_runtime_rpath(runtime_rpath DESTINATION my_package)  # relative to site-packages
+list(APPEND CMAKE_INSTALL_RPATH "$ORIGIN" ${runtime_rpath})
+# vtk.module: DEPENDS PyVistaRenderPasses::RenderPasses; wrapping then covers methods taking pvRenderPassChain*
+```
+
+To build against another VTK SDK, select one variant and the wheel's runtime pin follows that SDK:
+
+```sh
+PVRP_BACKEND=cvista PVRP_VTK_DIR=/path/to/cvista_sdk/cmake uv build --wheel
+cmake -S extensions -B build/static -DPVRP_STATIC=ON -DPVRP_BACKEND=vtk -DVTK_DIR=<dir>  # C++-only archives
+```
+
+`tests/sdk_consumer/` is a complete consumer; [docs/design.md](docs/design.md) covers the pin mechanism and the SDK layout.

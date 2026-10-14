@@ -518,7 +518,7 @@ def make_split_pass(
         on the renderer's erase flag to clear a framebuffer of its own: the
         stage suppresses that flag, so an FBO-owning pass that clears through
         ``vtkRenderer::Clear`` (SSAA, SSAO, blur) would render into
-        uninitialised memory. Wrap the whole sequence in such a pass instead.
+        uninitialized memory. Wrap the whole sequence in such a pass instead.
 
     channel : int, default: CHANNEL_ANNOTATION
         Channel both stages filter on.

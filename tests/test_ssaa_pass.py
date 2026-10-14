@@ -133,8 +133,8 @@ def _filled_cube_scene(*, factor: float | None, size: int = 240) -> np.ndarray:
     return img.mean(axis=2)
 
 
-def _partial_coverage_px(grey: np.ndarray) -> int:
-    return int(((grey > 20) & (grey < 235)).sum())
+def _partial_coverage_px(gray: np.ndarray) -> int:
+    return int(((gray > 20) & (gray < 235)).sum())
 
 
 def test_ssaa_factor_one_matches_no_pass():
@@ -202,10 +202,10 @@ def _line_thickness(factor: float | None, *, width: int = 4, size: int = 200) ->
         prp.enable_ssaa(pl, factor=factor)
     pl.camera_position = 'xy'
     pl.render_window.Render()
-    grey = np.asarray(pl.screenshot(return_img=True))[..., :3].mean(axis=2)
+    gray = np.asarray(pl.screenshot(return_img=True))[..., :3].mean(axis=2)
     pl.close()
-    lit_cols = int((grey.max(axis=0) > 30).sum())
-    return float(grey.sum() / 255.0 / max(lit_cols, 1))
+    lit_cols = int((gray.max(axis=0) > 30).sum())
+    return float(gray.sum() / 255.0 / max(lit_cols, 1))
 
 
 def test_ssaa_primitive_width_constant_across_factors():

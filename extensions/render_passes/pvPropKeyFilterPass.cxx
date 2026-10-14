@@ -234,7 +234,7 @@ void pvPropKeyFilterPass::RenderDelegate(const vtkRenderState* s, vtkRenderer* r
   }
 
   // A screen-space pass composes with GL_BLEND off, so a stage after it would
-  // draw an alpha-emitting actor as opaque colour. Restore the blending VTK
+  // draw an alpha-emitting actor as opaque color. Restore the blending VTK
   // renders with outside a pass chain.
   vtkOpenGLState::ScopedglEnableDisable blendSaver(ostate, GL_BLEND);
   vtkOpenGLState::ScopedglBlendFuncSeparate blendFuncSaver(ostate);

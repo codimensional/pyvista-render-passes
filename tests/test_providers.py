@@ -48,7 +48,7 @@ class _Provider(prp.BasePassProvider):
 
 
 class _OuterBlur(prp.BasePassProvider):
-    """A colour-only outer pass: its framebuffer has no depth the window could keep."""
+    """A color-only outer pass: its framebuffer has no depth the window could keep."""
 
     name = 'outer_blur'
     stages = ('outer',)
@@ -579,7 +579,7 @@ def _depth_scene(*, outer: bool, anti_aliasing: bool) -> tuple[np.ndarray, float
 
 
 @pytest.mark.parametrize('anti_aliasing', [False, True])
-def test_a_colour_only_outer_pass_changes_pixels_and_keeps_window_depth(anti_aliasing):
+def test_a_color_only_outer_pass_changes_pixels_and_keeps_window_depth(anti_aliasing):
     plain, plain_depth = _depth_scene(outer=False, anti_aliasing=anti_aliasing)
     blurred, blurred_depth = _depth_scene(outer=True, anti_aliasing=anti_aliasing)
     changed = float((np.abs(plain - blurred).max(axis=-1) > 8).mean())
@@ -591,8 +591,8 @@ def test_a_colour_only_outer_pass_changes_pixels_and_keeps_window_depth(anti_ali
 def _label_pixels(pl: pv.Plotter) -> int:
     pl.render_window.Render()
     img = np.asarray(pl.screenshot(return_img=True))[..., :3].astype(int)
-    grey = (np.abs(img[..., 0] - img[..., 1]) < 8) & (img[..., 0] > 90) & (img[..., 0] < 160)
-    return int(grey.sum())
+    gray = (np.abs(img[..., 0] - img[..., 1]) < 8) & (img[..., 0] > 90) & (img[..., 0] < 160)
+    return int(gray.sum())
 
 
 def test_point_labels_are_still_culled_under_an_outer_pass():
@@ -601,7 +601,7 @@ def test_point_labels_are_still_culled_under_an_outer_pass():
 
     def label_frames(*, outer: bool) -> list[int]:
         pl = pv.Plotter(window_size=(300, 300))
-        # Red, so a blurred edge never reads as a grey label box.
+        # Red, so a blurred edge never reads as a gray label box.
         pl.add_mesh(cube, style='wireframe', color='red')
         pl.add_point_labels(
             cube.cell_centers().points, list(range(cube.n_cells)), show_points=False

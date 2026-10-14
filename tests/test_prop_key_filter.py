@@ -73,8 +73,8 @@ def _halves(image: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     return image[:, : width // 2], image[:, width // 2 :]
 
 
-def _colour_max(image: np.ndarray, colour: int) -> int:
-    return int(image[..., colour].max())
+def _color_max(image: np.ndarray, color: int) -> int:
+    return int(image[..., color].max())
 
 
 def _three_sphere_plotter() -> pv.Plotter:
@@ -96,8 +96,8 @@ def _thirds(image: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return image[:, :edge], image[:, edge : 2 * edge], image[:, 2 * edge :]
 
 
-def _lit_pixels(image: np.ndarray, colour: int, threshold: int = 150) -> int:
-    return int(np.count_nonzero(image[..., colour] > threshold))
+def _lit_pixels(image: np.ndarray, color: int, threshold: int = 150) -> int:
+    return int(np.count_nonzero(image[..., color] > threshold))
 
 
 def _stages(sequence: vtkSequencePass) -> list[pvPropKeyFilterPass]:
@@ -387,24 +387,24 @@ def test_matching_mode_renders_only_tagged_props():
     pl, _, _ = _two_sphere_plotter()
     pl.renderer.SetPass(make_prop_filter_pass(tagged=True))
     left, right = _halves(pl.screenshot(return_img=True))
-    assert _colour_max(left, _RED) < 10
-    assert _colour_max(right, _BLUE) > 200
+    assert _color_max(left, _RED) < 10
+    assert _color_max(right, _BLUE) > 200
 
 
 def test_non_matching_mode_renders_only_untagged_props():
     pl, _, _ = _two_sphere_plotter()
     pl.renderer.SetPass(make_prop_filter_pass(tagged=False))
     left, right = _halves(pl.screenshot(return_img=True))
-    assert _colour_max(left, _RED) > 200
-    assert _colour_max(right, _BLUE) < 10
+    assert _color_max(left, _RED) > 200
+    assert _color_max(right, _BLUE) < 10
 
 
 def test_split_pass_renders_both_halves():
     pl, _, _ = _two_sphere_plotter()
     pl.renderer.SetPass(make_split_pass(_camera_pass()))
     left, right = _halves(pl.screenshot(return_img=True))
-    assert _colour_max(left, _RED) > 200
-    assert _colour_max(right, _BLUE) > 200
+    assert _color_max(left, _RED) > 200
+    assert _color_max(right, _BLUE) > 200
 
 
 def test_an_empty_subset_renders_the_rest_of_the_scene():
@@ -412,8 +412,8 @@ def test_an_empty_subset_renders_the_rest_of_the_scene():
     set_prop_filter_tag(scene)
     pl.renderer.SetPass(make_split_pass(_camera_pass()))
     left, right = _halves(pl.screenshot(return_img=True))
-    assert _colour_max(left, _RED) > 200
-    assert _colour_max(right, _BLUE) > 200
+    assert _color_max(left, _RED) > 200
+    assert _color_max(right, _BLUE) > 200
 
 
 def test_render_without_a_delegate_errors_and_draws_nothing():

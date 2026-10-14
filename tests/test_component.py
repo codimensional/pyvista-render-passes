@@ -307,9 +307,9 @@ def test_ssao_over_an_unshaded_volume_logs_no_error():
 def _label_pixels(pl: pv.Plotter) -> int:
     pl.render_window.Render()
     img = np.asarray(pl.screenshot(return_img=True))[..., :3].astype(int)
-    # The filled label boxes are mid grey; the wireframe is thin and dark.
-    grey = (np.abs(img[..., 0] - img[..., 1]) < 8) & (img[..., 0] > 90) & (img[..., 0] < 160)
-    return int(grey.sum())
+    # The filled label boxes are mid gray; the wireframe is thin and dark.
+    gray = (np.abs(img[..., 0] - img[..., 1]) < 8) & (img[..., 0] > 90) & (img[..., 0] < 160)
+    return int(gray.sum())
 
 
 @pytest.mark.parametrize(

@@ -407,7 +407,7 @@ void pvSSAAVolumePass::Render(const vtkRenderState* s)
   ostate->vtkglScissor(0, 0, w, h);
 
   // A screen-space delegate renders the scene into a framebuffer of its own
-  // and writes colour only here, so the depth this resolves would be stale.
+  // and writes color only here, so the depth this resolves would be stale.
   {
     vtkOpenGLState::ScopedglDepthMask dmsaver(ostate);
     ostate->vtkglDepthMask(GL_TRUE);
@@ -419,7 +419,7 @@ void pvSSAAVolumePass::Render(const vtkRenderState* s)
   this->DelegatePass->Render(&s2);
   this->NumberOfRenderedProps += this->DelegatePass->GetNumberOfRenderedProps();
 
-  // The w x h depth texture would size-mismatch the smaller colour attachments
+  // The w x h depth texture would size-mismatch the smaller color attachments
   // the downsample attaches next and fail the FBO completeness check. It stays
   // alive for the depth resolve below.
   this->FrameBufferObject->RemoveDepthAttachment();

@@ -54,7 +54,7 @@
  * With SSAO on, the translucent (or depth-peeling) and volumetric stages leave
  * the scene base and run after the SSAO pass, over its composited output and
  * against the depth it wrote. Inside the SSAO delegate, the shader replacements
- * that route positions and normals to the pass's extra colour attachments also
+ * that route positions and normals to the pass's extra color attachments also
  * apply to the props `vtkDualDepthPeelingPass` renders into a framebuffer of
  * its own, which has no such attachments: translucent geometry comes out
  * painted with its normals. Volumes are not occlusion-shaded either; they
@@ -66,7 +66,7 @@
  * `vtkSSAOPass` fills the position and normal attachments of its framebuffer
  * through shader replacements it installs on the props of the delegate render.
  * `vtkEDLShading` renders the props into a framebuffer of its own and composites
- * through a fullscreen quad that writes colour only. An SSAO pass delegating to
+ * through a fullscreen quad that writes color only. An SSAO pass delegating to
  * EDL therefore never sees a prop: its position and normal attachments stay
  * undefined, the occlusion resolves to "unoccluded" everywhere, and the pass is
  * a no-op that still costs a multi-attachment framebuffer every frame. The same
@@ -153,7 +153,7 @@ public:
   /**
    * Render props tagged on `pvPropKeyFilterPass::ChannelAnnotation` in their
    * own stage after EDL has composed, instead of through it. Only EDL gets the
-   * split: every other pass is a colour operation that should cover the whole
+   * split: every other pass is a color operation that should cover the whole
    * frame. Has no effect while EDL is off.
    */
   vtkSetMacro(AnnotationBypass, bool);

@@ -36,7 +36,7 @@
  * default: without it the window depth is never written under this pass, and
  * anything that reads it (vtkSelectVisiblePoints behind point labels, depth
  * images, picking) sees stale or empty depth. Off, the path is byte-identical to
- * stock SSAA colour.
+ * stock SSAA color.
  */
 #ifndef pvSSAAVolumePass_h
 #define pvSSAAVolumePass_h

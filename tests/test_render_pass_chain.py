@@ -541,8 +541,8 @@ def test_shadows_darken_the_ground_and_keep_translucent_props():
     assert red(shadowed) > 0.8 * red(plain)
 
 
-def test_ssao_keeps_depth_peeled_translucent_props_their_colour():
-    # A grey translucent cube over tan spheres: inside the SSAO delegate the
+def test_ssao_keeps_depth_peeled_translucent_props_their_color():
+    # A gray translucent cube over tan spheres: inside the SSAO delegate the
     # peeled cube came out painted with its normals (saturated red and green).
     pl = _scene()
     pl.add_mesh(pv.Cube(center=(0, 0, 0.6), x_length=5, y_length=5, z_length=1.2), opacity=0.5)

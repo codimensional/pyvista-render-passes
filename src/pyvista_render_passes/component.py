@@ -73,7 +73,7 @@ def _iter_props(renderer: pv.Renderer) -> Iterator[vtkProp]:
 
 
 def tag_scene_annotations(target: pv.BasePlotter | pv.Renderer) -> list[vtkProp]:
-    """Tag every recognisable annotation prop in a renderer for the EDL bypass.
+    """Tag every recognizable annotation prop in a renderer for the EDL bypass.
 
     Sweeps the renderer for :data:`ANNOTATION_PROP_TYPES` and tags any prop
     with no decision recorded yet, so a prop untagged on purpose stays untagged.
@@ -729,7 +729,7 @@ class RenderPassComponent:
         """Render tagged annotation props in their own stage after EDL (the default).
 
         Props tagged on :data:`~pyvista_render_passes.CHANNEL_ANNOTATION`
-        (:func:`tag_scene_annotations` tags the recognisable ones) are neither
+        (:func:`tag_scene_annotations` tags the recognizable ones) are neither
         shaded by EDL nor read into its depth image. They still depth-test
         against the scene. No effect unless EDL is enabled.
 

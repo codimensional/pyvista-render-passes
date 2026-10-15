@@ -25,14 +25,14 @@ camera -> lights -> [opaque | shadow maps]
 - **SSAO delegates to EDL, never the reverse.** `vtkSSAOPass` fills its position
   and normal attachments through shader replacements installed on the props of
   its delegate render. `vtkEDLShading` composites through a full-screen quad
-  that writes colour only, so an SSAO pass above EDL sees no props and resolves
+  that writes color only, so an SSAO pass above EDL sees no props and resolves
   to "unoccluded" everywhere. The same holds for any caller-supplied base pass
   that composites through a quad, which is why the base sits below SSAO.
 - **SSAO shades the opaque scene only.** With SSAO on, the translucent (or
   depth-peeling) and volumetric stages leave the base and run after the SSAO
   pass, through a camera pass that preserves the buffers, over its composited
   output and against the depth it wrote. Inside the SSAO delegate, the shader
-  replacements that route positions and normals to the pass's extra colour
+  replacements that route positions and normals to the pass's extra color
   attachments also apply to the props `vtkDualDepthPeelingPass` renders into a
   framebuffer of its own, which has no such attachments, so translucent
   geometry comes out painted with its normals. Volumes are not
@@ -78,7 +78,7 @@ camera -> lights -> [opaque | shadow maps]
   ([pyvista #4831](https://github.com/pyvista/pyvista/issues/4831)); stock
   VTK's `vtkSSAAPass` and `vtkSSAOPass` do the same. `TopPass` is the sequence
   of the outermost scene pass and the overlay; `ScenePass` is the former alone.
-  Blur and depth of field write colour only, so under them the resolved depth
+  Blur and depth of field write color only, so under them the resolved depth
   is the cleared value and labels are never culled. The SSAA depth resolve
   takes the nearest supersample, so a label anchored on a silhouette or a
   line can be culled that a single-sampled render would show.
@@ -103,14 +103,14 @@ instead of rebuilding it:
   delegate has already resolved to the window, so a pass that sizes its
   framebuffer from the logical window (tone mapping) covers the whole frame;
   as a `PostPass` it would cover `1/factor²` of the SSAA framebuffer. Wrapping
-  the scene directly loses the window depth: a colour-only outer pass
+  the scene directly loses the window depth: a color-only outer pass
   (`vtkGaussianBlurPass`) left 0.0% of the window depth finite against 11.0%
   without it, because the SSAA depth resolve landed in the outer pass's
   framebuffer. `Build` therefore forces SSAA at 1x under an outer pass and
   appends a window depth restore that re-runs
   `pvSSAAVolumePass::RenderDepthResolve` after it. Without the 1x SSAA there
   is no depth to restore, and the depth and point-label tests fail with
-  anti-aliasing off. An outer pass does not composite over a neighbouring
+  anti-aliasing off. An outer pass does not composite over a neighboring
   subplot tile even without that SSAA. An earlier probe reported a 1.3%
   change in the other tile, but it came from the component setting the
   window's multisamples to 0 under the default theme's 8. With the component
@@ -134,7 +134,7 @@ A `PassProvider` is one named unit of an extension: `name`, `stages`,
   (`test_an_installed_provider_applies_without_touching_render_passes` is a
   strict xfail). Patching `Plotter.__init__` was rejected. The clean fix is
   upstream: an `eager=True` flag on `register_plotter_component` that
-  `BasePlotter.__init__` honours once its renderers exist, or a
+  `BasePlotter.__init__` honors once its renderers exist, or a
   `__plotter_first_render__` hook called from `_on_first_render_request`.
   `register_pass_provider` stays for a provider scoped to one plotter and goes
   through the same `add_provider` checks.

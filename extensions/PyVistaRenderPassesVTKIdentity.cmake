@@ -11,9 +11,14 @@ function(_pyvista_render_passes_vtk_identity backend_var generation_var)
     file(STRINGS "${_version_file}" _lines REGEX "version")
     string(REGEX MATCH "[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+" _generation "${_lines}")
   else()
-    # Stock VTK keeps its ABI within a minor release, as the runtime pin assumes.
+    # Stock VTK keeps its ABI within a minor release, as the runtime pin assumes,
+    # but Kitware's Windows DLL names carry the patch release.
     set(_backend vtk)
-    string(REGEX MATCH "^[0-9]+\\.[0-9]+" _generation "${VTK_VERSION}")
+    if(WIN32)
+      string(REGEX MATCH "^[0-9]+\\.[0-9]+\\.[0-9]+" _generation "${VTK_VERSION}")
+    else()
+      string(REGEX MATCH "^[0-9]+\\.[0-9]+" _generation "${VTK_VERSION}")
+    endif()
   endif()
   set("${backend_var}" "${_backend}" PARENT_SCOPE)
   set("${generation_var}" "${_generation}" PARENT_SCOPE)

@@ -116,7 +116,8 @@ jobs:
 
   wasm:
     runs-on: ubuntu-latest
-    container: kitware/vtk-wasm-sdk@sha256:3981d8648854684eb7e8cdc00541c4c321f26d8c6e0d85ceb7ebce31bd91151f
+    # A release tag: Kitware prunes its nightly images, and a pruned digest cannot be pulled.
+    container: kitware/vtk-wasm-sdk@sha256:1fb94dab254612d20843a8e25d3506995f354873beb93b407007f725efb4841f # 9.7.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

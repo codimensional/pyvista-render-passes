@@ -42,7 +42,8 @@ class Variant:
         """Leading release segments that decide binary compatibility."""
         release = re.findall(r'\d+', self.sdk_version.split('+')[0].split('.post')[0])
         if self.backend == 'vtk':
-            return '.'.join(release[:2])
+            # Kitware's Windows DLL names carry the patch release.
+            return '.'.join(release[: 3 if sys.platform == 'win32' else 2])
         if len(release) < CVISTA_GENERATION_SEGMENTS:
             msg = (
                 f'cvista SDK version {self.sdk_version!r} at {self.vtk_dir} has no ABI '
@@ -55,6 +56,8 @@ class Variant:
     def requirement(self) -> str:
         """Requirement on the runtime distribution this build links against."""
         if self.backend == 'vtk':
+            if sys.platform == 'win32':
+                return f'vtk=={self.generation}.*'
             major, minor = (int(s) for s in self.generation.split('.'))
             return f'vtk>={major}.{minor},<{major}.{minor + 1}'
         # `cvista` carries the import package in every generation; the `rendering`

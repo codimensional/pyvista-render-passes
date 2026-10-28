@@ -279,7 +279,10 @@ distribution is bundled, so every repair step is told to exclude them.
 
 Each distribution is an extra pinned to what its build links: `vtk>=9.7,<9.8`
 for the stock build, `cvista[rendering]==9.7.0.5.*` for cvista, all four
-segments because the fourth is cvista's ABI generation. The pins are derived
+segments because the fourth is cvista's ABI generation. On Windows the stock
+pin is the exact patch release (`vtk==9.7.0.*`): Kitware names its DLLs
+`vtkCommonCore-9.7.0.dll`, so a build against 9.7.0 cannot load 9.7.1's. The
+pins are derived
 from the SDKs at build time (next section), so bumping an SDK means rebuilding
 and re-releasing, not editing a pin. Neither is a plain dependency, so an
 install carries only the distribution asked for; PyVista's own `vtk` pin
@@ -377,7 +380,8 @@ list(APPEND CMAKE_INSTALL_RPATH "$ORIGIN" ${runtime_rpath})
 **What the package refuses.** `PyVistaRenderPassesVTKIdentity.cmake` tells the
 build and the config the same thing about the VTK that `VTK_DIR` resolved: its
 backend (a cvista SDK keeps `_version.py` beside its `cmake/`) and its
-generation, cvista's four release segments or stock VTK's major.minor, which is
+generation, cvista's four release segments or stock VTK's major.minor
+(major.minor.patch on Windows), which is
 what the runtime pins accept. The config refuses another backend or generation,
 and when the library was built with the pre-C++11 libstdc++ ABI it also
 `try_compile`s that VTK links with it. Each refusal is a `find_package` failure

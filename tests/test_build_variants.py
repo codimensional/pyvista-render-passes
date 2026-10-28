@@ -52,6 +52,13 @@ def test_vtk_pin_is_the_sdk_minor(tmp_path):
     assert variant.requirement == 'vtk>=9.6,<9.7'
 
 
+def test_vtk_pin_on_windows_is_the_sdk_patch_release(tmp_path, monkeypatch):
+    monkeypatch.setattr(build_variants.sys, 'platform', 'win32')
+    env = {'PVRP_BACKEND': 'vtk', 'PVRP_VTK_DIR': str(_vtk_sdk(tmp_path / 'sdk', '9.7.0'))}
+    (variant,) = build_variants.discover(env)
+    assert variant.requirement == 'vtk==9.7.0.*'
+
+
 def test_cvista_sdk_without_a_generation_is_refused(tmp_path):
     env = {'PVRP_BACKEND': 'cvista', 'PVRP_VTK_DIR': str(_cvista_sdk(tmp_path, '9.6.2'))}
     (variant,) = build_variants.discover(env)
